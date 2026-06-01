@@ -15,9 +15,10 @@ import {
   resolvePlan,
   type PlanId,
 } from "~/lib/billing";
-import { ensureShop, setShopPlan } from "~/lib/shop.server";
+import { ensureShop, getLatestRun, parseRun, setShopPlan } from "~/lib/shop.server";
 import { authenticate } from "~/shopify.server";
-import { AppPage, KpiCard, MetricBadge, SectionHeader } from "~/components";
+import { AppPage, KpiCard, MetricBadge, SectionHeader, formatNumber, money } from "~/components";
+import { safeCount } from "~/lib/prisma-safe";
 
 const VALUE_COPY: Record<PlanId, string[]> = {
   free: ["Basic insights", "100 messages", "Weekly analysis"],
@@ -27,7 +28,8 @@ const VALUE_COPY: Record<PlanId, string[]> = {
 };
 
 export async function loader({ request }: LoaderFunctionArgs) {
-  const { session, billing } = await authenticate.admin(request);
+  try {
+    const { session, billing } = await authenticate.admin(request);
   const shop = await ensureShop(prisma, session.shop);
   const isProduction = process.env.NODE_ENV === "production";
   const configuredPlan = resolvePlan({
@@ -47,28 +49,49 @@ export async function loader({ request }: LoaderFunctionArgs) {
     await setShopPlan(prisma, session.shop, activeBillingPlan);
   }
   const plan = isProduction ? activeBillingPlan : configuredPlan;
-  const [usage, reportsGenerated, faqsPrepared] = await Promise.all([
+  const [usage, reportsGenerated, faqsPrepared, latestRun] = await Promise.all([
     getUsageSnapshot(prisma, shop.id, plan, new Date()),
-    prisma.weeklyReport.count({ where: { shopId: shop.id } }),
-    prisma.generatedFaq.count({ where: { shopId: shop.id, status: { in: ["prepared", "published"] } } }),
+    safeCount(prisma, "weeklyReport", { where: { shopId: shop.id } }),
+    safeCount(prisma, "generatedFaq", { where: { shopId: shop.id, status: { in: ["prepared", "published"] } } }),
+    getLatestRun(prisma, shop.id),
   ]);
+  const latestInsight = parseRun(latestRun);
   return json({
     plan,
     usage,
     reportsGenerated,
     faqsPrepared,
+    opportunitiesFound: latestInsight?.questionOpportunities.length ?? 0,
+    roiEstimateHigh: latestInsight?.revenueOpportunity.estimatedHigh ?? 0,
     hasActivePayment: billingCheck.hasActivePayment,
     isProduction,
     devOverride: getDevPlanOverride(),
     billingTestMode: isBillingTestMode(),
+    loadError: null,
   });
+  } catch (error) {
+    console.error("Billing loader failed", error);
+    return json({
+      plan: "free",
+      usage: { plan: "free", messagesThisMonth: 0, analysesThisWeek: 0, aiSummariesThisMonth: 0 },
+      reportsGenerated: 0,
+      faqsPrepared: 0,
+      opportunitiesFound: 0,
+      roiEstimateHigh: 0,
+      hasActivePayment: false,
+      isProduction: process.env.NODE_ENV === "production",
+      devOverride: getDevPlanOverride(),
+      billingTestMode: isBillingTestMode(),
+      loadError: "Some data could not be loaded. Your store data is safe. Try refreshing or run analysis again.",
+    });
+  }
 }
 
 export async function action({ request }: ActionFunctionArgs) {
   const { billing } = await authenticate.admin(request);
   const form = await request.formData();
   const id = String(form.get("plan")) as PlanId;
-  if (!PLAN_IDS.includes(id)) return json({ error: "Unknown plan" }, { status: 400 });
+  if (!PLAN_IDS.includes(id)) return json({ error: "Plan not available" }, { status: 400 });
   if (String(form.get("intent")) === "subscribe" && id !== "free") {
     await billing.request({
       plan: PLANS[id].name,
@@ -80,7 +103,8 @@ export async function action({ request }: ActionFunctionArgs) {
 }
 
 export default function Billing() {
-  const { plan, usage, reportsGenerated, faqsPrepared, isProduction, devOverride, billingTestMode } = useLoaderData<typeof loader>();
+  const { plan, usage, reportsGenerated, faqsPrepared, opportunitiesFound, roiEstimateHigh, isProduction, devOverride, billingTestMode, loadError } = useLoaderData<typeof loader>();
+  const currentPlan = PLAN_IDS.includes(plan as PlanId) ? plan as PlanId : "free";
   return (
     <AppPage
       title="Billing"
@@ -96,6 +120,11 @@ export default function Billing() {
       }
     >
       <BlockStack gap="400">
+        {loadError ? (
+          <Card>
+            <Text as="p" variant="bodyMd" tone="critical">{loadError}</Text>
+          </Card>
+        ) : null}
         {!isProduction && devOverride ? (
           <Card>
             <Text as="p" variant="bodyMd">DEV_PLAN_OVERRIDE is active: {devOverride}</Text>
@@ -113,10 +142,12 @@ export default function Billing() {
               description="Your current recovery workflow and usage this billing period."
             />
             <div className="cia-four-grid">
-              <KpiCard label="Plan" value={PLANS[plan].name} detail={`$${PLANS[plan].price}/mo`} tone="info" />
-              <KpiCard label="Messages analyzed" value={usage.messagesThisMonth.toLocaleString("en-US")} detail="This month" tone="info" />
-              <KpiCard label="Reports generated" value={reportsGenerated.toLocaleString("en-US")} detail="Executive summaries" tone="success" />
-              <KpiCard label="FAQs prepared" value={faqsPrepared.toLocaleString("en-US")} detail="Ready for Shopify publishing review" tone="success" />
+              <KpiCard label="Current Plan" value={PLANS[currentPlan].name} detail={`$${PLANS[currentPlan].price}/mo`} tone="info" />
+              <KpiCard label="Messages Processed" value={formatNumber(usage.messagesThisMonth)} detail="This month" tone="info" />
+              <KpiCard label="FAQs Created" value={formatNumber(faqsPrepared)} detail="Ready for Shopify review" tone="success" />
+              <KpiCard label="Reports Generated" value={formatNumber(reportsGenerated)} detail="Weekly recovery reports" tone="success" />
+              <KpiCard label="Revenue Opportunities Found" value={formatNumber(opportunitiesFound)} detail="From latest analysis" tone="warning" />
+              <KpiCard label="ROI Estimate" value={roiEstimateHigh > 0 ? `${money(roiEstimateHigh)}/mo` : "Connect orders"} detail="Potential monthly recovery" tone="success" />
             </div>
             <Card>
               <BlockStack gap="200">
@@ -131,7 +162,8 @@ export default function Billing() {
 
         <InlineGrid columns={{ xs: 1, sm: 2, lg: 4 }} gap="400">
           {Object.values(PLANS).map((item) => (
-            <Card key={item.id}>
+            <div className={item.id === "growth" ? "cia-plan-recommended" : undefined} key={item.id}>
+            <Card>
               <BlockStack gap="300">
                 <BlockStack gap="100">
                   <Text as="h2" variant="headingMd">{item.name}</Text>
@@ -140,7 +172,9 @@ export default function Billing() {
                 <Text as="p" variant="headingLg">${item.price}/mo</Text>
                 <Text as="p" variant="bodyMd">{item.tagline}</Text>
                 {VALUE_COPY[item.id].map((feature) => (
-                  <Text as="p" variant="bodySm" key={feature}>{feature}</Text>
+                  <div className="cia-plan-feature" key={feature}>
+                    <Text as="p" variant="bodySm">{feature}</Text>
+                  </div>
                 ))}
                 {plan === item.id ? <Badge tone="success">Current</Badge> : null}
                 {item.id !== "free" ? (
@@ -154,6 +188,7 @@ export default function Billing() {
                 ) : null}
               </BlockStack>
             </Card>
+            </div>
           ))}
         </InlineGrid>
         <div className="cia-section-band">

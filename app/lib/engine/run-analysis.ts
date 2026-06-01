@@ -30,6 +30,7 @@ export function runAnalysis(input: AnalysisInput): InsightResult {
   const questionOpportunities = buildQuestionOpportunities(keywordGroups);
   const recommendedActions = buildRecommendedActions(questionOpportunities);
   const contentGaps = buildContentGapAnalysis({
+    storeProducts: input.products,
     products: productConfusion,
     faqOpportunities,
     questionOpportunities,

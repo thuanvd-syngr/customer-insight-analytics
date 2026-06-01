@@ -31,7 +31,11 @@ export function canImportMessages(snapshot: UsageSnapshot, addCount: number): Ga
   return gate(used, limit, used <= limit, "Monthly message limit reached.");
 }
 
-export function canRunAnalysis(snapshot: UsageSnapshot): GateResult {
+export function canRunAnalysis(
+  snapshot: UsageSnapshot,
+  opts?: { bypass?: boolean },
+): GateResult {
+  if (opts?.bypass) return { allowed: true };
   const limit = PLANS[snapshot.plan].features.analysesPerWeek;
   return gate(
     snapshot.analysesThisWeek,

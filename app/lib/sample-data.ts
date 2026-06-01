@@ -1,5 +1,9 @@
 import type { AnalysisInput, NormalizedMessage, PageInput, ProductInput } from "~/lib/types";
 
+export function isSampleDataEnabled(env = process.env): boolean {
+  return env.ENABLE_SAMPLE_DATA === "true";
+}
+
 export const SAMPLE_PRODUCTS: ProductInput[] = [
   {
     id: "sample-1",

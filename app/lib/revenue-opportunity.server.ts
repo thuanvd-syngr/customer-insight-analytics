@@ -6,6 +6,7 @@ import type {
   QuickWin,
   RevenueOpportunity,
 } from "~/lib/types";
+import { moneyRange } from "~/components/format";
 
 const DEFAULT_AOV = 72;
 
@@ -49,9 +50,6 @@ const ACTION_TYPES: Partial<Record<KeywordGroupId, QuestionOpportunity["actionTy
   stock: "publish",
 };
 
-function moneyRange(low: number, high: number): string {
-  return `$${Math.round(low).toLocaleString("en-US")}-$${Math.round(high).toLocaleString("en-US")}/mo`;
-}
 
 function severityFor(impact: number, trend7: number): "low" | "medium" | "high" {
   if (impact >= 500 || trend7 >= 1) return "high";
@@ -201,7 +199,7 @@ export function buildRevenueOpportunity(
     monthlyAtRisk,
     estimatedLow,
     estimatedHigh,
-    headline: monthlyAtRisk > 0 ? `${moneyRange(estimatedLow, estimatedHigh)} estimated opportunity` : "Add customer questions to reveal recovery actions",
+    headline: monthlyAtRisk > 0 ? `${moneyRange(estimatedLow, estimatedHigh)}/mo estimated opportunity` : "Add customer questions to reveal recovery actions",
     summary: monthlyAtRisk > 0
       ? "Prioritized from customer questions that can delay checkout or trigger support tickets."
       : "Add customer questions or sync Shopify data to discover opportunities.",

@@ -31,7 +31,7 @@ export function buildExecutiveReport(input: {
     "## Product confusion",
     ...(safeInsight.productConfusion.length
       ? safeInsight.productConfusion.slice(0, 5).map((item) => `- ${item.productTitle}: score ${item.confusionScore}`)
-      : ["- Sync Shopify data and run analysis to identify products at risk."]),
+      : ["- Sync product and order data and run analysis to identify products at risk."]),
     "",
     "## Suggested actions",
     ...safeInsight.revenueOpportunity.quickWins.map((item) => `- ${item.title}: ${item.action}`),

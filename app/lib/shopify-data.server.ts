@@ -1,6 +1,7 @@
 import type { NormalizedMessage, PageInput, ProductInput } from "~/lib/types";
 import type { PrismaClient } from "@prisma/client";
-import { createHash } from "node:crypto";
+import { getDelegate } from "~/lib/prisma-safe";
+import { getShopifyProductSchemaDiagnostics } from "~/lib/schema-diagnostics.server";
 
 export interface AdminLike {
   graphql: (
@@ -15,7 +16,74 @@ async function graph<T>(
   variables: Record<string, unknown>,
 ): Promise<T> {
   const res = await admin.graphql(query, { variables });
-  return (await res.json()) as T;
+  const body = (await res.json()) as T & { errors?: Array<{ message: string }> };
+  if (body.errors?.length) {
+    throw new Error(body.errors.map((error) => error.message).join("; "));
+  }
+  return body;
+}
+
+export type SyncStepResult = {
+  ok: boolean;
+  count: number;
+  skipped?: boolean;
+  reason?: string;
+  error?: string;
+};
+
+export type ShopifySyncResult = {
+  products: SyncStepResult;
+  orders: SyncStepResult;
+  customers: SyncStepResult;
+  messages: number;
+};
+
+type ShopifyProductWriteData = {
+  title: string;
+  handle?: string | null;
+  description: string;
+  rawJson: string;
+  syncedAt: Date;
+  tags?: string;
+  productType?: string | null;
+  collections?: string;
+};
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "Shopify sync failed.";
+}
+
+function isAccessError(error: unknown): boolean {
+  return /(access|approved|protected|permission|scope|customer object)/i.test(errorMessage(error));
+}
+
+function friendlyProductSyncError(error: unknown): string {
+  const message = errorMessage(error);
+  if (/unknown argument/i.test(message)) {
+    return "Database schema is older than application code. Run prisma migrate deploy.";
+  }
+  return message;
+}
+
+type PageInfo = { hasNextPage: boolean; endCursor?: string | null };
+
+async function fetchConnection<TNode, TBody>(
+  admin: AdminLike,
+  query: string,
+  variables: Record<string, unknown>,
+  read: (body: TBody) => { nodes?: TNode[]; pageInfo?: PageInfo } | undefined,
+  limit = 1000,
+): Promise<TNode[]> {
+  const nodes: TNode[] = [];
+  let cursor: string | null = null;
+  do {
+    const body = await graph<TBody>(admin, query, { ...variables, after: cursor });
+    const connection = read(body);
+    nodes.push(...(connection?.nodes ?? []));
+    const pageInfo = connection?.pageInfo;
+    cursor = pageInfo?.hasNextPage ? pageInfo.endCursor ?? null : null;
+  } while (cursor && nodes.length < limit);
+  return nodes.slice(0, limit);
 }
 
 export async function fetchOrders(
@@ -28,7 +96,7 @@ export async function fetchOrders(
     admin,
     `query Orders($first: Int!) {
       orders(first: $first, sortKey: CREATED_AT, reverse: true) {
-        nodes { id name note email tags createdAt processedAt }
+        nodes { id name note tags createdAt processedAt }
       }
     }`,
     { first: opts.first ?? 50 },
@@ -44,17 +112,7 @@ export async function fetchOrders(
         occurredAt,
         source: "order_note",
         externalId: order.id,
-        customerRef: order.email ?? null,
-      });
-    }
-    if (order.email) {
-      messages.push({
-        id: `${order.id}-email`,
-        content: `Customer email domain: ${order.email.split("@")[1] ?? order.email}`,
-        occurredAt,
-        source: "customer_email",
-        externalId: order.id,
-        customerRef: order.email,
+        customerRef: null,
       });
     }
     return messages;
@@ -63,85 +121,90 @@ export async function fetchOrders(
 
 export async function fetchProducts(
   admin: AdminLike,
-  opts: { first?: number } = {},
+  opts: { first?: number; limit?: number } = {},
 ): Promise<ProductInput[]> {
-  const body = await graph<{
+  const products = await fetchConnection<
+    ShopifyProductNode,
+    {
     data?: {
       products?: {
-        nodes?: Array<{ id: string; title: string; handle: string; description?: string | null }>;
+        nodes?: ShopifyProductNode[];
+        pageInfo?: PageInfo;
       };
     };
   }>(
     admin,
-    `query Products($first: Int!) {
-      products(first: $first) {
-        nodes { id title handle description }
+    `query Products($first: Int!, $after: String) {
+      products(first: $first, after: $after, sortKey: UPDATED_AT, reverse: true) {
+        nodes {
+          id
+          title
+          handle
+          descriptionHtml
+          tags
+          productType
+          collections(first: 20) { nodes { id title handle } }
+        }
+        pageInfo { hasNextPage endCursor }
       }
     }`,
     { first: opts.first ?? 50 },
+    (body) => body.data?.products,
+    opts.limit ?? opts.first ?? 1000,
   );
 
-  return (body.data?.products?.nodes ?? []).map((product) => ({
+  return products.map((product) => ({
     id: product.id,
     title: product.title,
-    handle: product.handle,
-    description: product.description ?? "",
+    handle: product.handle ?? undefined,
+    description: product.descriptionHtml ?? "",
+    tags: product.tags ?? [],
+    productType: product.productType ?? null,
+    collections: product.collections?.nodes?.map((collection) => collection.title) ?? [],
   }));
+}
+
+interface ShopifyCollectionNode {
+  id: string;
+  title: string;
+  handle?: string | null;
+}
+
+interface ShopifyProductNode {
+  id: string;
+  title: string;
+  handle?: string | null;
+  descriptionHtml?: string | null;
+  tags?: string[] | null;
+  productType?: string | null;
+  collections?: { nodes?: ShopifyCollectionNode[] };
 }
 
 interface ShopifyOrderNode {
   id: string;
   name?: string | null;
   note?: string | null;
-  email?: string | null;
   tags?: string[] | null;
   createdAt: string;
   processedAt?: string | null;
 }
 
-interface ShopifyCustomerNode {
-  id: string;
-  displayName?: string | null;
-  email?: string | null;
-  tags?: string[] | null;
-  note?: string | null;
-}
-
-function hashEmail(email?: string | null): string | null {
-  if (!email) return null;
-  return createHash("sha256").update(email.trim().toLowerCase()).digest("hex");
-}
-
-export async function fetchCustomerSnapshots(
-  admin: AdminLike,
-  opts: { first?: number } = {},
-): Promise<ShopifyCustomerNode[]> {
-  const body = await graph<{ data?: { customers?: { nodes?: ShopifyCustomerNode[] } } }>(
-    admin,
-    `query Customers($first: Int!) {
-      customers(first: $first, sortKey: UPDATED_AT, reverse: true) {
-        nodes { id displayName email tags note }
-      }
-    }`,
-    { first: opts.first ?? 50 },
-  );
-  return body.data?.customers?.nodes ?? [];
-}
-
 export async function fetchOrderSnapshots(
   admin: AdminLike,
-  opts: { first?: number } = {},
+  opts: { first?: number; limit?: number } = {},
 ): Promise<ShopifyOrderNode[]> {
-  const body = await graph<{ data?: { orders?: { nodes?: ShopifyOrderNode[] } } }>(
+  return fetchConnection<ShopifyOrderNode, { data?: { orders?: { nodes?: ShopifyOrderNode[]; pageInfo?: PageInfo } } }>(
     admin,
-    `query Orders($first: Int!) {
-      orders(first: $first, sortKey: CREATED_AT, reverse: true) {
-        nodes { id name note email tags createdAt processedAt }
+    `query Orders($first: Int!, $after: String) {
+      orders(first: $first, after: $after, sortKey: CREATED_AT, reverse: true) {
+        nodes { id name note tags createdAt processedAt }
+        pageInfo { hasNextPage endCursor }
       }
     }`,
     { first: opts.first ?? 50 },
+    (body) => body.data?.orders,
+    opts.limit ?? opts.first ?? 1000,
   );
-  return body.data?.orders?.nodes ?? [];
 }
 
 export async function fetchPages(
@@ -176,8 +239,14 @@ export async function collectShopData(
   pages: PageInput[];
 }> {
   const [messages, products, pages] = await Promise.all([
-    fetchOrders(admin, { first: opts.orders }),
-    fetchProducts(admin, { first: opts.products }),
+    fetchOrders(admin, { first: opts.orders }).catch((error) => {
+      console.warn("Order note sync skipped", errorMessage(error));
+      return [] as NormalizedMessage[];
+    }),
+    fetchProducts(admin, { limit: opts.products }).catch((error) => {
+      console.warn("Product sync skipped", errorMessage(error));
+      return [] as ProductInput[];
+    }),
     fetchPages(admin, { first: opts.pages }),
   ]);
   return { messages, products, pages };
@@ -187,43 +256,96 @@ export async function syncShopifyData(
   db: PrismaClient,
   shopId: string,
   admin: AdminLike,
-): Promise<{ products: number; orders: number; customers: number; messages: number }> {
-  const [products, orders, customers] = await Promise.all([
-    fetchProducts(admin, { first: 100 }),
-    fetchOrderSnapshots(admin, { first: 100 }),
-    fetchCustomerSnapshots(admin, { first: 100 }),
-  ]);
+  opts: { shopDomain?: string; grantedScopes?: string | null } = {},
+): Promise<ShopifySyncResult> {
   const now = new Date();
+  const shopifyProduct = getDelegate(db, "shopifyProduct");
+  const shopifyOrder = getDelegate(db, "shopifyOrder");
+  const importedMessage = getDelegate(db, "importedMessage");
+  const result: ShopifySyncResult = {
+    products: { ok: true, count: 0 },
+    orders: { ok: true, count: 0 },
+    customers: {
+      ok: false,
+      count: 0,
+      skipped: true,
+      reason: "Protected customer data not approved",
+    },
+    messages: 0,
+  };
 
-  await Promise.all(products.map((product) =>
-    db.shopifyProduct.upsert({
-      where: { shopId_externalId: { shopId, externalId: product.id ?? product.title } },
-      update: {
-        title: product.title,
-        handle: product.handle,
-        description: product.description ?? "",
-        rawJson: JSON.stringify(product),
-        syncedAt: now,
-      },
-      create: {
-        shopId,
-        externalId: product.id ?? product.title,
-        title: product.title,
-        handle: product.handle,
-        description: product.description ?? "",
-        rawJson: JSON.stringify(product),
-        syncedAt: now,
-      },
-    }),
-  ));
+  let products: ProductInput[] = [];
+  try {
+    const schema = await getShopifyProductSchemaDiagnostics(db);
+    const includeTags = schema.hasTags && schema.clientHasTags;
+    const includeProductType = schema.hasProductType && schema.clientHasProductType;
+    const includeCollections = schema.hasCollections && schema.clientHasCollections;
+    if (schema.compatibilityMode) {
+      console.warn("Schema mismatch detected. Running compatibility mode.", {
+        shop: opts.shopDomain,
+        tags: includeTags,
+        productType: includeProductType,
+        collections: includeCollections,
+        migrationVersion: schema.migrationVersion,
+      });
+    }
+    console.info("Shopify product sync attempted", {
+      shop: opts.shopDomain,
+      grantedScopes: opts.grantedScopes,
+      maxProducts: 1000,
+    });
+    products = await fetchProducts(admin, { first: 50, limit: 1000 });
+    console.info("Shopify product sync returned", {
+      shop: opts.shopDomain,
+      count: products.length,
+    });
+    if (!shopifyProduct?.upsert) {
+      result.products = { ok: false, count: 0, skipped: false, error: "Product database model unavailable" };
+    } else {
+      await Promise.all(products.map((product) => {
+        const writeData: ShopifyProductWriteData = {
+          title: product.title,
+          handle: product.handle,
+          description: product.description ?? "",
+          rawJson: JSON.stringify(product),
+          syncedAt: now,
+        };
+        if (includeTags) writeData.tags = JSON.stringify(product.tags ?? []);
+        if (includeProductType) writeData.productType = product.productType ?? null;
+        if (includeCollections) writeData.collections = JSON.stringify(product.collections ?? []);
+        return shopifyProduct.upsert?.({
+          where: { shopId_externalId: { shopId, externalId: product.id ?? product.title } },
+          update: writeData,
+          create: {
+            shopId,
+            externalId: product.id ?? product.title,
+            ...writeData,
+          },
+        });
+      }));
+      result.products = { ok: true, count: products.length };
+    }
+  } catch (error) {
+    console.warn("Shopify product sync failed", {
+      shop: opts.shopDomain,
+      error: friendlyProductSyncError(error),
+    });
+    result.products = { ok: false, count: 0, error: friendlyProductSyncError(error), skipped: false };
+  }
 
-  await Promise.all(orders.map((order) =>
-    db.shopifyOrder.upsert({
+  let orders: ShopifyOrderNode[] = [];
+  try {
+    orders = await fetchOrderSnapshots(admin, { first: 100, limit: 1000 });
+    if (!shopifyOrder?.upsert) {
+      result.orders = { ok: false, count: 0, skipped: true, reason: "Order storage unavailable" };
+    } else {
+      await Promise.all(orders.map((order) =>
+    shopifyOrder.upsert?.({
       where: { shopId_externalId: { shopId, externalId: order.id } },
       update: {
         name: order.name,
         note: order.note,
-        customerRef: hashEmail(order.email),
+        customerRef: null,
         tags: JSON.stringify(order.tags ?? []),
         processedAt: order.processedAt ? new Date(order.processedAt) : new Date(order.createdAt),
         rawJson: JSON.stringify(order),
@@ -234,38 +356,25 @@ export async function syncShopifyData(
         externalId: order.id,
         name: order.name,
         note: order.note,
-        customerRef: hashEmail(order.email),
+        customerRef: null,
         tags: JSON.stringify(order.tags ?? []),
         processedAt: order.processedAt ? new Date(order.processedAt) : new Date(order.createdAt),
         rawJson: JSON.stringify(order),
         syncedAt: now,
       },
     }),
-  ));
-
-  await Promise.all(customers.map((customer) =>
-    db.shopifyCustomer.upsert({
-      where: { shopId_externalId: { shopId, externalId: customer.id } },
-      update: {
-        displayName: customer.displayName,
-        emailHash: hashEmail(customer.email),
-        tags: JSON.stringify(customer.tags ?? []),
-        note: customer.note,
-        rawJson: JSON.stringify(customer),
-        syncedAt: now,
-      },
-      create: {
-        shopId,
-        externalId: customer.id,
-        displayName: customer.displayName,
-        emailHash: hashEmail(customer.email),
-        tags: JSON.stringify(customer.tags ?? []),
-        note: customer.note,
-        rawJson: JSON.stringify(customer),
-        syncedAt: now,
-      },
-    }),
-  ));
+      ));
+      result.orders = { ok: true, count: orders.length };
+    }
+  } catch (error) {
+    result.orders = {
+      ok: false,
+      count: 0,
+      error: errorMessage(error),
+      skipped: isAccessError(error),
+      reason: isAccessError(error) ? "Order access unavailable" : undefined,
+    };
+  }
 
   const messageInputs = [
     ...orders.flatMap((order) => [
@@ -274,7 +383,7 @@ export async function syncShopifyData(
             shopId,
             source: "order_note",
             externalId: `${order.id}:note`,
-            customerRef: hashEmail(order.email),
+            customerRef: null,
             content: order.note,
             occurredAt: order.processedAt ? new Date(order.processedAt) : new Date(order.createdAt),
           }
@@ -284,55 +393,55 @@ export async function syncShopifyData(
             shopId,
             source: "order_tags",
             externalId: `${order.id}:tags`,
-            customerRef: hashEmail(order.email),
+            customerRef: null,
             content: `Order tags: ${order.tags.join(", ")}`,
             occurredAt: order.processedAt ? new Date(order.processedAt) : new Date(order.createdAt),
           }
         : null,
     ]),
-    ...customers.flatMap((customer) => [
-      customer.note
-        ? {
-            shopId,
-            source: "customer_note",
-            externalId: `${customer.id}:note`,
-            customerRef: hashEmail(customer.email),
-            content: customer.note,
-            occurredAt: now,
-          }
-        : null,
-      customer.tags?.length
-        ? {
-            shopId,
-            source: "customer_tags",
-            externalId: `${customer.id}:tags`,
-            customerRef: hashEmail(customer.email),
-            content: `Customer tags: ${customer.tags.join(", ")}`,
-            occurredAt: now,
-          }
-        : null,
-    ]),
-    ...products.map((product) => ({
+    ...products.flatMap((product) => [
+      {
       shopId,
       source: "product_text",
       externalId: `${product.id}:description`,
       customerRef: null,
-      content: `${product.title}. ${product.description ?? ""}`,
+      content: [
+        product.title,
+        product.description ?? "",
+        product.productType ? `Product type: ${product.productType}` : "",
+        product.tags?.length ? `Product tags: ${product.tags.join(", ")}` : "",
+        product.collections?.length ? `Collections: ${product.collections.join(", ")}` : "",
+      ].filter(Boolean).join(". "),
       occurredAt: now,
-    })),
+      },
+      product.tags?.length
+        ? {
+            shopId,
+            source: "product_tags",
+            externalId: `${product.id}:tags`,
+            customerRef: null,
+            content: `Product tags for ${product.title}: ${product.tags.join(", ")}`,
+            occurredAt: now,
+          }
+        : null,
+    ]),
   ].filter((message): message is NonNullable<typeof message> => Boolean(message?.content.trim()));
 
   let messages = 0;
+  if (!importedMessage?.findFirst || !importedMessage?.create) {
+    return result;
+  }
   for (const message of messageInputs) {
-    const existing = await db.importedMessage.findFirst({
+    const existing = await importedMessage.findFirst({
       where: { shopId, externalId: message.externalId },
       select: { id: true },
     });
     if (!existing) {
-      await db.importedMessage.create({ data: message });
+      await importedMessage.create({ data: message });
       messages += 1;
     }
   }
+  result.messages = messages;
 
-  return { products: products.length, orders: orders.length, customers: customers.length, messages };
+  return result;
 }

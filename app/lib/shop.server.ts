@@ -112,9 +112,69 @@ export async function saveInsightRun(
     });
   }
 
-  if (result.productConfusion.length > 0) {
+  // Persist product findings from BOTH direct-mention confusion AND content-gap
+  // analysis. contentGaps covers every synced product even when no messages
+  // mention it by title — which is the common case when a merchant imports
+  // generic friction questions (e.g. "delivery time") rather than product-named
+  // messages. We merge both sources, deduplicating by productId/productTitle.
+  const confusionByKey = new Map(
+    result.productConfusion.map((p) => [p.productId ?? p.productTitle, p]),
+  );
+  // Build the merged list: start with contentGaps (all synced products), then
+  // promote any direct-mention scores if they're higher.
+  type MergedFinding = {
+    productId: string | null;
+    productTitle: string;
+    mentionCount: number;
+    confusionScore: number;
+    topGroups: string[];
+    exampleQuote: string | null | undefined;
+  };
+  const mergedFindings: MergedFinding[] = (result.contentGaps ?? []).map((gap) => {
+    const key = gap.productId ?? gap.productTitle;
+    const direct = confusionByKey.get(key);
+    return {
+      productId: gap.productId,
+      productTitle: gap.productTitle,
+      mentionCount: Math.max(
+        gap.customerQuestions.length,
+        direct?.mentionCount ?? 0,
+      ),
+      confusionScore: Math.max(
+        gap.contentGapScore,
+        direct?.confusionScore ?? 0,
+      ),
+      topGroups: direct?.topGroups.length
+        ? direct.topGroups
+        : gap.missingSections.slice(0, 4),
+      exampleQuote: direct?.exampleQuote ?? gap.customerQuestions[0] ?? null,
+    };
+  });
+  // Also add any direct-confusion products not already in contentGaps
+  for (const p of result.productConfusion) {
+    const key = p.productId ?? p.productTitle;
+    if (!mergedFindings.find((f) => (f.productId ?? f.productTitle) === key)) {
+      mergedFindings.push({
+        productId: p.productId,
+        productTitle: p.productTitle,
+        mentionCount: p.mentionCount,
+        confusionScore: p.confusionScore,
+        topGroups: p.topGroups,
+        exampleQuote: p.exampleQuote ?? null,
+      });
+    }
+  }
+
+  console.info("ProductFinding persistence", {
+    directConfusion: result.productConfusion.length,
+    contentGaps: result.contentGaps?.length ?? 0,
+    merged: mergedFindings.length,
+    willPersist: mergedFindings.length > 0,
+  });
+
+  if (mergedFindings.length > 0) {
     await db.productFinding.createMany({
-      data: result.productConfusion.map((p) => ({
+      data: mergedFindings.map((p) => ({
         runId: run.id,
         shopId,
         productId: p.productId,

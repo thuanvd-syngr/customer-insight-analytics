@@ -35,7 +35,7 @@ export function ProductRecoveryCard({
           <Text as="h3" variant="headingMd">
             {title}
           </Text>
-          {typeof score === "number" ? <Badge tone="info">{`Score ${score}/100`}</Badge> : null}
+          {typeof score === "number" ? <Badge tone={score >= 50 ? "warning" : "info"}>{`Recovery score ${score}/100`}</Badge> : null}
         </InlineStack>
         <Text as="p" variant="bodySm" tone="subdued">
           {customersAffected} customers affected
@@ -64,7 +64,7 @@ export function ProductRecoveryCard({
           </Text>
         ) : null}
         <Text as="p" variant="bodyMd">
-          Recommended fix: {topIssue ? `Create content for ${topIssue}` : "Sync Shopify content and analyze questions"}
+          Priority action: {topIssue ? `Create revenue recovery content for ${topIssue}` : "Sync Shopify content and analyze customer questions"}
         </Text>
         <InlineStack gap="100">
           {missingContent.length ? (
@@ -83,8 +83,10 @@ export function ProductRecoveryCard({
           </Text>
         ) : null}
         <InlineStack gap="200">
-          <Button url={detailUrl}>View detail</Button>
-          <Button url="/app/faq" variant="primary">Generate content</Button>
+          <Button url={detailUrl}>View recovery plan</Button>
+          <Button url="/app/faq" variant="primary">Generate Content</Button>
+          <Button url="/app/faq">Generate FAQ</Button>
+          {competitorPressure && competitorPressure > 0 ? <Button url="/app/competitors">Create Comparison Page</Button> : null}
         </InlineStack>
       </BlockStack>
     </div>

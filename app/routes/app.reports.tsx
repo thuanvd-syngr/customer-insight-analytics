@@ -1,4 +1,5 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
+import type { WeeklyEmail, WeeklyReport } from "@prisma/client";
 import { json, redirect } from "@remix-run/node";
 import { Form, useLoaderData, useNavigation } from "@remix-run/react";
 import { Badge, BlockStack, Box, Button, Card, DataTable, Divider, InlineGrid, InlineStack, Text } from "@shopify/polaris";
@@ -42,6 +43,7 @@ import {
 import { ensureShop, getLatestRun, parseRun } from "~/lib/shop.server";
 import { normalizeInsightResult } from "~/lib/types";
 import { authenticate } from "~/shopify.server";
+import { getDelegate } from "~/lib/prisma-safe";
 
 async function context(request: Request) {
   const { session } = await authenticate.admin(request);
@@ -57,21 +59,43 @@ async function context(request: Request) {
 }
 
 export async function loader({ request }: LoaderFunctionArgs) {
-  const { shop, plan } = await context(request);
-  const [reports, latestRun] = await Promise.all([
-    prisma.weeklyReport.findMany({ where: { shopId: shop.id }, orderBy: { createdAt: "desc" }, take: 10 }),
-    getLatestRun(prisma, shop.id),
-  ]);
+  try {
+    const { shop, plan } = await context(request);
+    const weeklyReport = getDelegate(prisma, "weeklyReport");
+    const weeklyEmail = getDelegate(prisma, "weeklyEmail");
+    const [reports, weeklyEmails, latestRun] = await Promise.all([
+      weeklyReport?.findMany
+        ? weeklyReport.findMany({ where: { shopId: shop.id }, orderBy: { createdAt: "desc" }, take: 10 })
+        : [],
+      weeklyEmail?.findMany
+        ? weeklyEmail.findMany({ where: { shopId: shop.id }, orderBy: { generatedAt: "desc" }, take: 10 })
+        : [],
+      getLatestRun(prisma, shop.id),
+    ]);
   // parseRun already returns a normalized InsightResult, so the executive view
   // can render straight from the latest analysis even before a report is saved.
   const latestInsight = latestRun ? parseRun(latestRun) : null;
   return json({
     reports,
+    weeklyEmails,
     latestInsight,
     hasRun: Boolean(latestRun),
     plan,
     canExport: canExportReport(plan).allowed,
+    loadError: null,
   });
+  } catch (error) {
+    console.error("Reports loader failed", error);
+    return json({
+      reports: [],
+      weeklyEmails: [],
+      latestInsight: null,
+      hasRun: false,
+      plan: "free",
+      canExport: false,
+      loadError: "Some data could not be loaded. Your store data is safe. Try refreshing or run analysis again.",
+    });
+  }
 }
 
 export async function action({ request }: ActionFunctionArgs) {
@@ -84,7 +108,10 @@ export async function action({ request }: ActionFunctionArgs) {
     if (!gate.allowed) return json({ error: gate.reason }, { status: 403 });
     const id = String(form.get("id") ?? "");
     const format = String(form.get("format") ?? "markdown");
-    const report = await prisma.weeklyReport.findFirst({ where: { id, shopId: shop.id } });
+    const weeklyReport = getDelegate(prisma, "weeklyReport");
+    const report = weeklyReport?.findFirst
+      ? await weeklyReport.findFirst({ where: { id, shopId: shop.id } })
+      : null;
     if (!report) return json({ error: "Report not found" }, { status: 404 });
     const insight = JSON.parse(report.dataJson);
     const markdown = report.aiSummary ?? buildExecutiveReport({
@@ -138,10 +165,23 @@ export async function action({ request }: ActionFunctionArgs) {
     });
   }
 
+  if (intent === "preview-weekly-email") {
+    const id = String(form.get("id") ?? "");
+    const weeklyEmail = getDelegate(prisma, "weeklyEmail");
+    const email = weeklyEmail?.findFirst
+      ? await weeklyEmail.findFirst({ where: { id, shopId: shop.id } })
+      : null;
+    if (!email) return json({ error: "Weekly email not found" }, { status: 404 });
+    if (weeklyEmail?.update) await weeklyEmail.update({ where: { id: email.id }, data: { status: "previewed" } });
+    return new Response(email.html, {
+      headers: {
+        "Content-Type": "text/html; charset=utf-8",
+        "Content-Disposition": `inline; filename="${id}-weekly-recovery-email.html"`,
+      },
+    });
+  }
+
   const now = new Date();
-  const usage = await getUsageSnapshot(prisma, shop.id, plan, now);
-  const gate = canGenerateAISummary(usage);
-  if (!gate.allowed) return json({ error: gate.reason }, { status: 403 });
   const run = await getLatestRun(prisma, shop.id);
   const insight = parseRun(run);
   if (!run || !insight) return redirect("/app/import");
@@ -151,10 +191,30 @@ export async function action({ request }: ActionFunctionArgs) {
   const provider = getAIProvider();
   const useAI = PLANS[plan].features.aiWeeklySummary && provider.isConfigured();
   const input = { shopDomain, insight, weekStart, weekEnd };
+  if (intent === "weekly-email") {
+    const html = buildWeeklyEmailHtml(input);
+    const weeklyEmail = getDelegate(prisma, "weeklyEmail");
+    if (!weeklyEmail?.create) return redirect("/app/reports");
+    await weeklyEmail.create({
+      data: {
+        shopId: shop.id,
+        runId: run.id,
+        subject: `Weekly revenue recovery for ${shopDomain}`,
+        html,
+      },
+    });
+    return redirect("/app/reports");
+  }
+
+  const usage = await getUsageSnapshot(prisma, shop.id, plan, now);
+  const gate = canGenerateAISummary(usage);
+  if (!gate.allowed) return json({ error: gate.reason }, { status: 403 });
   const aiSummary = useAI
     ? await provider.generateWeeklySummary(input)
     : buildExecutiveReport(input);
-  await prisma.weeklyReport.create({
+  const weeklyReport = getDelegate(prisma, "weeklyReport");
+  if (!weeklyReport?.create) return redirect("/app/reports");
+  await weeklyReport.create({
     data: {
       shopId: shop.id,
       runId: run.id,
@@ -173,7 +233,7 @@ export async function action({ request }: ActionFunctionArgs) {
 const IMPACT_LEVEL: Record<string, PriorityLevel> = { low: "low", medium: "medium", high: "high" };
 
 export default function Reports() {
-  const { reports, latestInsight, hasRun, canExport } = useLoaderData<typeof loader>();
+  const { reports, weeklyEmails, latestInsight, hasRun, canExport, loadError } = useLoaderData<typeof loader>();
   const navigation = useNavigation();
   if (navigation.state === "loading") return <ListSkeleton />;
 
@@ -201,8 +261,8 @@ export default function Reports() {
 
   return (
     <AppPage
-      title="Executive Revenue Report"
-      subtitle="Weekly revenue recovery snapshot your team can act on."
+      title="Weekly Revenue Recovery Report"
+      subtitle="A weekly operator view of recovered revenue, risk, issues, products, competitors, and actions."
       primaryAction={
         <Form method="post">
           <input type="hidden" name="intent" value="summary" />
@@ -213,46 +273,59 @@ export default function Reports() {
       }
     >
       <BlockStack gap="500">
+        {loadError ? (
+          <Card>
+            <Text as="p" variant="bodyMd" tone="critical">
+              {loadError}
+            </Text>
+          </Card>
+        ) : null}
         {!hasRun || !insight || !revenue ? (
           <Card>
             <EmptyInsight
-              heading="Executive report will appear here"
-              primaryActionLabel="Import customer data"
+              heading="Weekly revenue recovery report will appear here"
+              primaryActionLabel="Import conversations"
               primaryActionUrl="/app/import"
               secondaryActionLabel="View dashboard"
               secondaryActionUrl="/app"
             >
-              <p>Generate your first weekly summary once customer messages are analyzed. We will surface revenue at risk, top products, competitors, and recommended actions here.</p>
+              <p>Analyze customer questions to identify lost sales, top issues, products, competitors, and recommended actions.</p>
             </EmptyInsight>
           </Card>
         ) : (
           <>
             <BlockStack gap="300">
               <SectionHeader
-              title="Revenue Recovery Summary"
+              title="Weekly Revenue Recovery Summary"
                 description={revenue.headline}
                 trailing={
                   revenue.topFriction ? (
-                    <TrendIndicator value={revenue.topFriction.trend7} suffix="top friction" />
+                    <TrendIndicator value={revenue.topFriction.trend7} suffix="top issue" />
                   ) : undefined
                 }
               />
               <InlineGrid columns={{ xs: 1, sm: 2, md: 3 }} gap="400">
                 <MetricCard
-                  title="Revenue at risk"
+                  title="Revenue At Risk"
                   value={moneyRange(revenue.estimatedLow, revenue.estimatedHigh)}
                   sublabel={revenue.summary}
                   tone="critical"
-                  helpText="Estimated revenue tied to unresolved friction across the analysis window."
+                  helpText="Estimated revenue tied to unresolved buying objections across the analysis window."
                 />
                 <MetricCard
-                  title="Monthly at risk"
+                  title="Revenue Recovered"
+                  value="Track after publish"
+                  sublabel="Use prepared content to begin measuring recovery"
+                  tone="success"
+                />
+                <MetricCard
+                  title="Monthly at Risk"
                   value={money(revenue.monthlyAtRisk)}
                   sublabel="Projected monthly run-rate"
                   tone="warning"
                 />
                 <MetricCard
-                  title="Top friction"
+                  title="Top Issue"
                   value={revenue.topFriction ? revenue.topFriction.label : "Add customer questions"}
                   sublabel={
                     revenue.topFriction
@@ -268,8 +341,8 @@ export default function Reports() {
             {driverBars.length > 0 ? (
               <BlockStack gap="300">
                 <SectionHeader
-                  title="Top Frictions"
-                  description="Friction groups contributing the most estimated revenue impact"
+                title="Top Issues"
+                description="Buying objections contributing the most estimated revenue impact"
                 />
                 <Card>
                   <BarChart data={driverBars} tone="critical" />
@@ -287,7 +360,7 @@ export default function Reports() {
                   <BarChart data={productBars} tone="info" />
                 ) : (
                   <Text as="p" variant="bodySm" tone="subdued">
-                    Sync Shopify data and run analysis to identify products at risk.
+                    Sync product and order data and run analysis to identify products at risk.
                   </Text>
                 )}
               </Card>
@@ -295,8 +368,8 @@ export default function Reports() {
 
             <BlockStack gap="300">
               <SectionHeader
-                title="Competitor Threats"
-                description="Competitor mentions surfaced in customer conversations"
+                title="Top Competitors"
+                description="Competitor concerns surfaced in customer conversations"
               />
               <Card>
                 {insight.competitors.length > 0 ? (
@@ -329,7 +402,7 @@ export default function Reports() {
             <BlockStack gap="300">
               <SectionHeader
                 title="Recommended Actions"
-                description="Quick wins and high-demand questions to address first"
+                description="The highest-priority fixes to recover revenue this week"
               />
               <InlineGrid columns={{ xs: 1, md: 2 }} gap="400">
                 <Card>
@@ -399,7 +472,49 @@ export default function Reports() {
 
         <BlockStack gap="300">
           <SectionHeader
-            title="Executive Summary Exports"
+            title="Weekly Revenue Recovery Email"
+            description="Generate, preview, and store HTML email content without sending provider integration."
+          />
+          <Card>
+            <BlockStack gap="300">
+              <InlineStack align="space-between" blockAlign="center">
+                <BlockStack gap="050">
+                  <Text as="h3" variant="headingSm">HTML email drafts</Text>
+                  <Text as="p" variant="bodySm" tone="subdued">
+                    Stored weekly recovery emails can be previewed and copied into any email provider.
+                  </Text>
+                </BlockStack>
+                <Form method="post">
+                  <input type="hidden" name="intent" value="weekly-email" />
+                  <Button submit variant="primary" disabled={!hasRun}>Generate email HTML</Button>
+                </Form>
+              </InlineStack>
+              {weeklyEmails.length > 0 ? (
+                <DataTable
+                  columnContentTypes={["text", "text", "text"]}
+                  headings={["Generated", "Status", "Preview"]}
+                  rows={(weeklyEmails as WeeklyEmail[]).map((email) => [
+                    new Date(email.generatedAt).toISOString().slice(0, 10),
+                    email.status,
+                    <Form method="post" key={email.id}>
+                      <input type="hidden" name="intent" value="preview-weekly-email" />
+                      <input type="hidden" name="id" value={email.id} />
+                      <Button submit size="slim">Preview HTML</Button>
+                    </Form>,
+                  ])}
+                />
+              ) : (
+                <Text as="p" variant="bodySm" tone="subdued">
+                  Generate an email after running analysis.
+                </Text>
+              )}
+            </BlockStack>
+          </Card>
+        </BlockStack>
+
+        <BlockStack gap="300">
+          <SectionHeader
+            title="Report Preview"
             description="Forward-ready summaries for operators, marketers, and leadership"
           />
           <Card>
@@ -407,8 +522,8 @@ export default function Reports() {
               <DataTable
                 columnContentTypes={["text", "numeric", "text", "text"]}
                 headings={["Generated", "Score", "Provider", "Export"]}
-                rows={reports.map((report) => [
-                  new Date(report.generatedAt).toLocaleDateString(),
+                rows={(reports as WeeklyReport[]).map((report) => [
+                  new Date(report.generatedAt).toISOString().slice(0, 10),
                   report.insightScore,
                   report.aiProvider && !["mock", "rule"].includes(report.aiProvider)
                     ? report.aiProvider

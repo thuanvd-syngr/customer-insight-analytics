@@ -15,14 +15,40 @@ export function money(amount: number, currency = "USD"): string {
   return usd(currency).format(Math.round(amount || 0));
 }
 
-/** "$1.2k" / "$3.4M" for compact metric display. */
-export function compactMoney(amount: number, currency = "USD"): string {
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency,
-    notation: "compact",
-    maximumFractionDigits: 1,
-  }).format(amount || 0);
+/**
+ * "$380" / "$1.2K" / "$1M" — deterministic compact money.
+ * Does NOT use Intl compact notation: Node.js ICU emits "$1.0K" while browsers
+ * emit "$1K" for the same input, causing React hydration mismatches.
+ */
+export function compactMoney(amount: number, _currency = "USD"): string {
+  const n = Math.round(amount || 0);
+  if (n >= 1_000_000) {
+    const str = (n / 1_000_000).toFixed(1);
+    return `$${str.endsWith(".0") ? str.slice(0, -2) : str}M`;
+  }
+  if (n >= 1_000) {
+    const str = (n / 1_000).toFixed(1);
+    return `$${str.endsWith(".0") ? str.slice(0, -2) : str}K`;
+  }
+  return `$${n}`;
+}
+
+/** Alias — explicit name for test imports and new call sites. */
+export const formatCompactMoney = compactMoney;
+
+/**
+ * "$380-$1K" — compact range, fully SSR-safe.
+ * Falls back to "Connect orders to unlock recovery estimates" when both values are 0.
+ */
+export function formatMoneyRange(
+  low: number | null | undefined,
+  high: number | null | undefined,
+): string {
+  const safeLow = Math.round(low || 0);
+  const safeHigh = Math.round(high || 0);
+  if (safeLow <= 0 && safeHigh <= 0) return "Connect orders to unlock recovery estimates";
+  if (safeLow > 0 && safeHigh > safeLow) return `${compactMoney(safeLow)}-${compactMoney(safeHigh)}`;
+  return compactMoney(Math.max(safeLow, safeHigh));
 }
 
 export function moneyRange(
@@ -32,7 +58,7 @@ export function moneyRange(
 ): string {
   const safeLow = Math.round(low || 0);
   const safeHigh = Math.round(high || 0);
-  if (safeLow <= 0 && safeHigh <= 0) return "Recovery estimate pending";
+  if (safeLow <= 0 && safeHigh <= 0) return "Connect orders to unlock recovery estimates";
   if (safeLow > 0 && safeHigh > safeLow) return `${money(safeLow, currency)}-${money(safeHigh, currency)}`;
   return money(Math.max(safeLow, safeHigh), currency);
 }

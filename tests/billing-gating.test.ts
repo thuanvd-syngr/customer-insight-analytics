@@ -21,6 +21,13 @@ describe("billing gating", () => {
     expect(canRunAnalysis({ plan: "free", messagesThisMonth: 0, analysesThisWeek: 1, aiSummariesThisMonth: 0 }).allowed).toBe(false);
   });
 
+  it("bypasses weekly limit when bypass option is set", () => {
+    const blocked = { plan: "free" as const, messagesThisMonth: 0, analysesThisWeek: 1, aiSummariesThisMonth: 0 };
+    expect(canRunAnalysis(blocked).allowed).toBe(false);
+    expect(canRunAnalysis(blocked, { bypass: true }).allowed).toBe(true);
+    expect(canRunAnalysis(blocked, { bypass: false }).allowed).toBe(false);
+  });
+
   it("gates plan features", () => {
     expect(canGenerateAISummary({ plan: "growth", messagesThisMonth: 0, analysesThisWeek: 0, aiSummariesThisMonth: 0 }).allowed).toBe(true);
     expect(canGenerateAISummary({ plan: "starter", messagesThisMonth: 0, analysesThisWeek: 0, aiSummariesThisMonth: 0 }).allowed).toBe(false);

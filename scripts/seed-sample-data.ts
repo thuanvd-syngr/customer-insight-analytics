@@ -4,8 +4,15 @@ import {
   buildSampleAnalysisInput,
   filterNewSampleMessages,
   getSampleMessages,
+  isSampleDataEnabled,
 } from "../app/lib/sample-data";
 import { saveInsightRun } from "../app/lib/shop.server";
+
+if (process.env.NODE_ENV === "production" || !isSampleDataEnabled()) {
+  console.log("Sample data seeding is disabled. Set ENABLE_SAMPLE_DATA=true outside production to enable it.");
+  await prisma.$disconnect();
+  process.exit(0);
+}
 
 const shopDomain = process.env.SEED_SHOP_DOMAIN ?? "dev-shop.myshopify.com";
 const now = new Date();

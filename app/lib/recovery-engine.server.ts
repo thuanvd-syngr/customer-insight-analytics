@@ -3,9 +3,19 @@ import type {
   CompetitorThreat,
   ContentGapAnalysis,
   FaqOpportunityResult,
+  KeywordGroupId,
   ProductConfusionResult,
+  ProductInput,
   QuestionOpportunity,
 } from "~/lib/types";
+import { KEYWORD_GROUPS_BY_ID } from "~/lib/engine/keyword-groups";
+import { normalizeText } from "~/lib/engine/normalize";
+import { tokenize } from "~/lib/engine/tokenize";
+import {
+  STOREWIDE_GROUP_IDS,
+  scoreProductTopicRelevance,
+} from "~/lib/engine/product-matcher";
+import { moneyRange } from "~/components/format";
 
 const SECTION_LABELS: Record<string, string> = {
   size: "Size Guide",
@@ -34,37 +44,158 @@ export function opportunityRangeForGroups(
 }
 
 export function buildContentGapAnalysis(input: {
+  storeProducts?: ProductInput[];
   products: ProductConfusionResult[];
   faqOpportunities: FaqOpportunityResult[];
   questionOpportunities: QuestionOpportunity[];
 }): ContentGapAnalysis[] {
-  return input.products.slice(0, 20).map((product) => {
-    const productFaqGaps = input.faqOpportunities.filter(
-      (faq) => !faq.hasContent && (!faq.productId || faq.productId === product.productId),
-    );
+  console.info("Product recovery analysis", {
+    productsAnalyzed: input.storeProducts?.length ?? input.products.length,
+    productConfusionFindings: input.products.length,
+    faqOpportunities: input.faqOpportunities.length,
+    questionOpportunities: input.questionOpportunities.length,
+  });
+  const confusionById = new Map(input.products.map((product) => [product.productId, product]));
+  // Only product-specific question groups are used for gap-only products.
+  // Storewide topics (shipping, delivery, payment, return, refund, discount, warranty)
+  // are surfaced in Insights/FAQ but must NOT be assigned per-product when there
+  // is no direct customer mention of that product.
+  const questionGroups = input.questionOpportunities.slice(0, 8);
+  const productSpecificQuestionGroups = questionGroups.filter(
+    (item) => !STOREWIDE_GROUP_IDS.has(item.groupId),
+  );
+
+  const productPool = input.storeProducts?.length
+    ? input.storeProducts.slice(0, 1000).map((product) => {
+        const confused = confusionById.get(product.id);
+        let topGroups: string[];
+        if (confused) {
+          // Direct confusion: keep all groups including storewide ones
+          topGroups = confused.topGroups;
+        } else if (product) {
+          // Gap-only: assign product-specific topics that score above threshold
+          topGroups = productSpecificQuestionGroups
+            .filter((item) => scoreProductTopicRelevance(product, item.groupId as KeywordGroupId) >= 25)
+            .slice(0, 4)
+            .map((item) => item.groupId);
+        } else {
+          topGroups = [];
+        }
+        return {
+          productId: product.id,
+          productTitle: product.title,
+          mentionCount: confused?.mentionCount ?? 0,
+          confusionScore: confused?.confusionScore ?? 0,
+          topGroups,
+          exampleQuote: confused?.exampleQuote,
+          product,
+          isDirectConfusion: Boolean(confused),
+        };
+      })
+    : input.products.map((product) => ({
+        ...product,
+        product: null as ProductInput | null,
+        isDirectConfusion: true,
+      }));
+
+  const gaps = productPool.slice(0, 1000).map((product) => {
+    const rawText = [
+      product.productTitle,
+      product.product?.description ?? "",
+      product.product?.tags?.join(" ") ?? "",
+      product.product?.productType ?? "",
+      product.product?.collections?.join(" ") ?? "",
+    ].join(" ");
+    const text = normalizeText(rawText);
+    const tokens = new Set(tokenize(rawText, { removeStopWords: false, minLength: 2 }));
+
+    const productFaqGaps = input.faqOpportunities.filter((faq) => {
+      if (faq.hasContent) return false;
+      if (faq.productId && faq.productId !== product.productId) return false;
+      // For gap-only products, filter out storewide FAQ gaps
+      if (!product.isDirectConfusion && STOREWIDE_GROUP_IDS.has(faq.groupId as KeywordGroupId)) return false;
+      // For gap-only, also filter by product relevance
+      if (!product.isDirectConfusion && product.product) {
+        const score = scoreProductTopicRelevance(product.product, faq.groupId as KeywordGroupId);
+        if (score < 25) return false;
+      }
+      return true;
+    });
+
+    // For direct confusion products: keep all groups + top question groups
+    // For gap-only products: only product-specific groups already in topGroups
     const groupIds = Array.from(
-      new Set([...product.topGroups, ...productFaqGaps.map((faq) => faq.groupId)]),
+      new Set([
+        ...product.topGroups,
+        ...productFaqGaps.map((faq) => faq.groupId),
+        ...(product.isDirectConfusion ? questionGroups.slice(0, 4).map((item) => item.groupId) : []),
+      ]),
     );
-    const missingSections = groupIds
+
+    if (groupIds.length === 0) return null;
+
+    const missingGroupIds = groupIds.filter((groupId) => {
+      const definition = KEYWORD_GROUPS_BY_ID[groupId as keyof typeof KEYWORD_GROUPS_BY_ID];
+      if (!definition) return true;
+      return !definition.terms.some((term: string) => {
+        const normalizedTerm = normalizeText(term);
+        return normalizedTerm.includes(" ")
+          ? text.includes(normalizedTerm)
+          : tokens.has(normalizedTerm);
+      });
+    });
+
+    if (missingGroupIds.length === 0) return null;
+
+    const coveredGroupIds = groupIds.filter((groupId) => !missingGroupIds.includes(groupId));
+    const missingSections = missingGroupIds
       .map((groupId) => SECTION_LABELS[groupId] ?? `${groupId} FAQ`)
       .slice(0, 6);
-    const coveredSections = input.faqOpportunities
-      .filter((faq) => faq.hasContent && product.topGroups.includes(faq.groupId))
-      .map((faq) => SECTION_LABELS[faq.groupId] ?? faq.groupId);
-    const range = opportunityRangeForGroups(groupIds, input.questionOpportunities);
-    const weightedGap = missingSections.length * 14 + product.confusionScore * 0.45 + product.mentionCount * 2;
+    const coveredSections = coveredGroupIds.map((groupId) => SECTION_LABELS[groupId] ?? groupId);
+    const range = opportunityRangeForGroups(missingGroupIds, input.questionOpportunities);
+    const weightedGap =
+      missingSections.length * 14 +
+      product.confusionScore * 0.45 +
+      product.mentionCount * 2 +
+      questionGroups.filter((item) => missingGroupIds.includes(item.groupId)).reduce((sum, item) => sum + item.priorityScore * 0.12, 0);
+    const score = Math.max(0, Math.min(100, Math.round(weightedGap)));
+
+    // customerQuestions: real question text from keyword group definitions,
+    // not section label strings. Used as example quotes in the UI.
+    const customerQuestions = groupIds.map(
+      (groupId) => KEYWORD_GROUPS_BY_ID[groupId as keyof typeof KEYWORD_GROUPS_BY_ID]?.question ?? SECTION_LABELS[groupId] ?? groupId,
+    );
+
     return {
       productId: product.productId,
       productTitle: product.productTitle,
-      contentGapScore: Math.max(0, Math.min(100, Math.round(weightedGap))),
+      mentionCount: product.mentionCount,
+      contentGapScore: score,
       missingSections,
       coveredSections,
-      customerQuestions: product.topGroups.map((groupId) => SECTION_LABELS[groupId] ?? groupId),
+      customerQuestions,
       estimatedLow: range.low,
       estimatedHigh: range.high,
       recommendedActions: missingSections.slice(0, 3).map((section) => `Generate ${section}`),
+      expectedImpact:
+        range.high > 0
+          ? `${moneyRange(range.low, range.high)}/mo`
+          : score >= 50
+            ? "Reduce repeated pre-purchase questions"
+            : "Improve product page completeness",
+      timeToFix: missingSections.length <= 1 ? "10 min" : missingSections.length <= 3 ? "20 min" : "30 min",
     };
-  }).sort((a, b) => b.contentGapScore - a.contentGapScore);
+  })
+    .filter((gap): gap is NonNullable<typeof gap> => gap !== null && gap.missingSections.length > 0)
+    .sort((a, b) => b.contentGapScore - a.contentGapScore)
+    .slice(0, 50);
+
+  console.info("Product recovery findings", {
+    productsAnalyzed: productPool.length,
+    findingsGenerated: gaps.length,
+    findingsSkipped: Math.max(0, productPool.length - gaps.length),
+  });
+  return gaps;
 }
 
 function reasonFromQuote(quote?: string): string[] {

@@ -2,6 +2,7 @@ import type { LoaderFunctionArgs } from "@remix-run/node";
 import { json } from "@remix-run/node";
 import { useLoaderData, useNavigation } from "@remix-run/react";
 import {
+  Banner,
   Badge,
   BlockStack,
   Button,
@@ -11,40 +12,51 @@ import {
 
 import {
   AppPage,
-  BarChart,
-  ChartCard,
   EmptyStateCard,
   InsightOpportunityCard,
   KpiCard,
   ListSkeleton,
   SectionHeader,
   TrendIndicator,
-  compactMoney,
+  formatMoneyRange,
   formatNumber,
   moneyRange,
   PriorityBadge,
 } from "~/components";
-import type { BarDatum } from "~/components";
 import prisma from "~/db.server";
 import { ensureShop, getLatestRun, parseRun } from "~/lib/shop.server";
 import { EMPTY_INSIGHT } from "~/lib/types";
 import type { LeakageSeverity } from "~/lib/types";
 import { authenticate } from "~/shopify.server";
+import { safeCount } from "~/lib/prisma-safe";
 
 export async function loader({ request }: LoaderFunctionArgs) {
-  const { session } = await authenticate.admin(request);
-  const shop = await ensureShop(prisma, session.shop);
-  return json({ insight: parseRun(await getLatestRun(prisma, shop.id)) ?? EMPTY_INSIGHT });
+  try {
+    const { session } = await authenticate.admin(request);
+    const shop = await ensureShop(prisma, session.shop);
+    const [productCount, importedMessageCount] = await Promise.all([
+      safeCount(prisma, "shopifyProduct", { where: { shopId: shop.id } }),
+      safeCount(prisma, "importedMessage", { where: { shopId: shop.id } }),
+    ]);
+    return json({
+      insight: parseRun(await getLatestRun(prisma, shop.id)) ?? EMPTY_INSIGHT,
+      productCount,
+      importedMessageCount,
+      loadError: null,
+    });
+  } catch (error) {
+    console.error("Insights loader failed", error);
+    return json({
+      insight: EMPTY_INSIGHT,
+      productCount: 0,
+      importedMessageCount: 0,
+      loadError: "Some data could not be loaded. Your store data is safe. Try refreshing or run analysis again.",
+    });
+  }
 }
 
-const SEVERITY_TONE: Record<LeakageSeverity, "critical" | "warning" | "info"> = {
-  high: "critical",
-  medium: "warning",
-  low: "info",
-};
-
 export default function Insights() {
-  const { insight } = useLoaderData<typeof loader>();
+  const { insight, productCount, importedMessageCount } = useLoaderData<typeof loader>();
   const navigation = useNavigation();
   if (navigation.state === "loading") return <ListSkeleton rows={6} />;
 
@@ -83,31 +95,21 @@ export default function Insights() {
     0,
   );
 
-  // Friction-group overview for the BarChart (sorted by demand).
-  const frictionBars: BarDatum[] = opportunities
-    .slice()
-    .sort((a, b) => b.count - a.count)
-    .map((item) => ({
-      label: item.label,
-      value: item.count,
-      display: formatNumber(item.count),
-      tone: SEVERITY_TONE[item.severity] === "critical"
-        ? "critical"
-        : SEVERITY_TONE[item.severity] === "warning"
-          ? "warning"
-          : "info",
-    }));
-
   if (!hasData) {
     return (
       <AppPage
-        title="Customer Friction Intelligence"
-        subtitle="Find the highest revenue opportunities hidden in repeated customer questions."
+        title="Revenue Opportunities"
+        subtitle="Prioritized issues that cost revenue and the fix to create next."
         primaryAction={<Button url="/app/import" variant="primary">Add customer questions</Button>}
       >
+        {importedMessageCount > 0 && productCount === 0 ? (
+          <Banner tone="info" title="Product mapping requires product sync">
+            <p>Customer questions can still be analyzed, but product-level mapping needs product sync.</p>
+          </Banner>
+        ) : null}
         <EmptyStateCard
-          title="Recovery opportunities will appear here"
-          body="Once customer messages are analyzed, the questions that block purchases will appear here ranked by impact and recoverable revenue."
+          title="Import conversations to discover revenue opportunities"
+          body="Analyze customer questions to identify lost sales, affected customers, and the first fix to create."
           actionLabel="Open data hub"
           actionUrl="/app/import"
         />
@@ -117,17 +119,22 @@ export default function Insights() {
 
   return (
     <AppPage
-      title="Customer Friction Intelligence"
-      subtitle="Highest-value questions customers ask before buying."
-      primaryAction={<Button url="/app/faq" variant="primary">Generate FAQ</Button>}
+      title="Revenue Opportunities"
+      subtitle="Highest-value buying objections ranked by revenue impact."
+      primaryAction={<Button url="/app/faq" variant="primary">Create Revenue Recovery Content</Button>}
       secondaryAction={<Button url="/app/products">View products</Button>}
     >
+      {importedMessageCount > 0 && productCount === 0 ? (
+        <Banner tone="info" title="Product mapping requires product sync">
+          <p>Insights are based on imported customer questions. Sync product data to map issues to specific products.</p>
+        </Banner>
+      ) : null}
       <BlockStack gap="500">
         <div className="cia-four-grid">
           <KpiCard
-            label="Questions analyzed"
+            label="Customers impacted"
             value={formatNumber(totalQuestions)}
-            detail={`${opportunities.length} friction topics`}
+            detail={`${opportunities.length} revenue issues`}
             tone="info"
           />
           <KpiCard
@@ -137,8 +144,8 @@ export default function Insights() {
             tone={highImpact > 0 ? "warning" : "info"}
           />
           <KpiCard
-            label="Recoverable revenue"
-            value={recoverableHigh > 0 ? `${compactMoney(recoverableLow)}-${compactMoney(recoverableHigh)}` : "Recovery estimate pending"}
+            label="Recovery impact"
+            value={recoverableHigh > 0 ? formatMoneyRange(recoverableLow, recoverableHigh) : "Connect orders"}
             detail="Estimated monthly upside if answered"
             tone="success"
           />
@@ -153,8 +160,8 @@ export default function Insights() {
         <div className="cia-section-band">
           <BlockStack gap="300">
             <SectionHeader
-              title="Highest Revenue Opportunities"
-              description="The customer frictions most likely to affect conversion and product confidence."
+              title="Revenue Opportunities"
+              description="Each issue includes customer impact, trend, recovery estimate, priority, and the next fix."
             />
             {opportunities.slice(0, 4).map((item) => {
               const productsAffected = insight.productConfusion.filter((product) =>
@@ -177,22 +184,19 @@ export default function Insights() {
                     </InlineStack>
                   </BlockStack>
                   <Text as="span" variant="headingMd" tone={item.highEstimate > 0 ? "success" : "subdued"}>
-                    {item.highEstimate > 0 ? `${moneyRange(item.lowEstimate, item.highEstimate)}/mo` : "Recovery estimate pending"}
+                    {item.highEstimate > 0 ? `${moneyRange(item.lowEstimate, item.highEstimate)}/mo` : "Connect orders"}
                   </Text>
+                  <Button url="/app/faq" variant={item.severity === "high" ? "primary" : undefined}>Generate Fix</Button>
                 </div>
               );
             })}
           </BlockStack>
         </div>
 
-        <ChartCard title="Friction by topic" subtitle="Where customers get stuck before buying, ranked by volume.">
-          <BarChart data={frictionBars} tone="info" limit={8} />
-        </ChartCard>
-
         <BlockStack gap="300">
           <SectionHeader
-            title="Recommended friction fixes"
-            description="Create the content customers need before they leave the product page."
+            title="Fix Cards"
+            description="Create the exact content needed to recover the sale."
           />
           <div className="cia-two-grid">
             {opportunities.map((item) => (

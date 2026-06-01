@@ -23,6 +23,7 @@
     "db:studio": "prisma studio",
     "setup": "prisma generate && prisma migrate deploy",
     "seed": "tsx scripts/seed-sample-data.ts",
+    "data:reset-real-test": "tsx scripts/reset-real-test-data.ts",
     "start": "node ./scripts/start-production.mjs",
     "check:env": "node ./scripts/check-env.mjs",
     "docker:build": "docker build -t customer-insight-analytics .",

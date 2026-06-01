@@ -53,6 +53,9 @@ export interface ProductInput {
   title: string;
   description?: string;
   handle?: string;
+  tags?: string[];
+  productType?: string | null;
+  collections?: string[];
 }
 
 /** Existing store content (e.g. FAQ pages from read_content) used to detect coverage gaps. */
@@ -172,13 +175,18 @@ export interface RecommendedAction {
 export interface ContentGapAnalysis {
   productId: string | null;
   productTitle: string;
+  /** Real message mention count (0 for gap-only products without direct confusion). */
+  mentionCount: number;
   contentGapScore: number;
   missingSections: string[];
   coveredSections: string[];
+  /** Real question text from keyword-group definitions, not section-label strings. */
   customerQuestions: string[];
   estimatedLow: number;
   estimatedHigh: number;
   recommendedActions: string[];
+  expectedImpact?: string;
+  timeToFix?: string;
 }
 
 export interface CompetitorThreat {

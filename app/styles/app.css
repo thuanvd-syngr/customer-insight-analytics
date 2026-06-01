@@ -42,6 +42,40 @@
   padding: 28px;
 }
 
+.cia-command-hero {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.7fr) minmax(0, 1.3fr);
+  gap: 28px;
+  align-items: center;
+}
+
+.cia-action-impact {
+  color: #14532d;
+  font-size: 28px;
+  font-weight: 800;
+  line-height: 1.15;
+}
+
+.cia-progress-steps {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.cia-plan-feature {
+  padding: 10px 0;
+  border-top: 1px solid #edf0f3;
+}
+
+.cia-plan-feature:first-child {
+  border-top: 0;
+}
+
+.cia-plan-recommended {
+  border: 2px solid #2563eb;
+  box-shadow: 0 14px 30px rgba(37, 99, 235, 0.14);
+}
+
 .cia-section-band {
   background: #ffffff;
   border: 1px solid #e3e7ee;
@@ -189,11 +223,13 @@
 
 @media (max-width: 980px) {
   .cia-hero-grid,
+  .cia-command-hero,
   .cia-two-grid,
   .cia-three-grid,
   .cia-four-grid,
   .cia-metric-strip,
-  .cia-split-panel {
+  .cia-split-panel,
+  .cia-progress-steps {
     grid-template-columns: 1fr;
   }
 

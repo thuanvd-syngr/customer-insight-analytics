@@ -15,6 +15,7 @@ export function CompetitorCard({
   recommendation: string;
   affectedProducts: string[];
 }) {
+  const threatScore = Math.min(100, Math.round(mentions * 12 + affectedProducts.length * 10));
   return (
     <div className="cia-card cia-card-pad">
       <BlockStack gap="300">
@@ -22,11 +23,15 @@ export function CompetitorCard({
           <Text as="h3" variant="headingMd">
             {name}
           </Text>
-          <Badge tone={mentions >= 3 ? "warning" : "info"}>{`${mentions} mentions`}</Badge>
+          <Badge tone={threatScore >= 50 ? "critical" : mentions >= 3 ? "warning" : "info"}>{`Threat score ${threatScore}/100`}</Badge>
+        </InlineStack>
+        <InlineStack gap="200">
+          <Badge tone="info">{`${mentions} customer concerns`}</Badge>
+          <Badge tone="warning">{`${affectedProducts.length || "Storewide"} affected products`}</Badge>
         </InlineStack>
         <BlockStack gap="100">
           <Text as="span" variant="bodySm" tone="subdued">
-            Why customers compare
+            Customer concerns
           </Text>
           <InlineStack gap="100">
             {reasons.map((reason) => (
@@ -57,10 +62,10 @@ export function CompetitorCard({
               )}
             </InlineStack>
             <Text as="p" variant="bodySm">
-              Content to create: competitor comparison section.
+              Recommended content: comparison FAQ, proof points, and guarantee copy.
             </Text>
             <Text as="p" variant="bodySm">
-              FAQ to create: Why choose us over {name}?
+              FAQ opportunity: Why choose us over {name}?
             </Text>
             <Text as="p" variant="bodySm" tone="subdued">
               Merchant action: publish proof, guarantees, and pricing clarity near the buy button.
@@ -68,7 +73,7 @@ export function CompetitorCard({
           </BlockStack>
         </div>
         <Button url="/app/faq" variant="primary">
-          Create comparison FAQ
+          Generate Comparison FAQ
         </Button>
       </BlockStack>
     </div>

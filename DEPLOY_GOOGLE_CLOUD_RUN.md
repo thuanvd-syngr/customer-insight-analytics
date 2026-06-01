@@ -52,4 +52,4 @@ curl https://YOUR_CLOUD_RUN_URL/health
 curl https://YOUR_CLOUD_RUN_URL/health/config
 ```
 
-Run a test install from the Partner Dashboard, import sample data, run analysis, generate a weekly report, and uninstall to verify webhook cleanup.
+Run a test install from the Partner Dashboard, sync product and order data, import real customer questions, run analysis, generate a weekly report, and uninstall to verify webhook cleanup.

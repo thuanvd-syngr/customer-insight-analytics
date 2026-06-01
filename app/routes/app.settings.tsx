@@ -9,27 +9,46 @@ import { getAIProvider } from "~/lib/ai";
 import { ensureShop } from "~/lib/shop.server";
 import { authenticate } from "~/shopify.server";
 import { AppPage, SectionHeader } from "~/components";
+import { getDelegate } from "~/lib/prisma-safe";
 
 export async function loader({ request }: LoaderFunctionArgs) {
-  const { session } = await authenticate.admin(request);
-  const shop = await ensureShop(prisma, session.shop);
-  const settings = await prisma.appSetting.findMany({ where: { shopId: shop.id } });
-  const values = Object.fromEntries(settings.map((setting) => [setting.key, setting.value]));
-  const provider = getAIProvider();
-  return json({
-    competitorTerms: values.competitorTerms ?? "Amazon\nTemu\nWalmart\nTarget\nTikTok Shop",
-    autoCleanup: values.autoCleanup ?? "false",
-    aiProvider: provider.id,
-    aiConfigured: provider.isConfigured(),
-  });
+  try {
+    const { session } = await authenticate.admin(request);
+    const shop = await ensureShop(prisma, session.shop);
+    const appSetting = getDelegate(prisma, "appSetting");
+    const settings = appSetting?.findMany
+      ? await appSetting.findMany({ where: { shopId: shop.id } })
+      : [];
+    const values = Object.fromEntries(settings.map((setting: { key: string; value: string }) => [setting.key, setting.value]));
+    const provider = getAIProvider();
+    return json({
+      competitorTerms: values.competitorTerms ?? "",
+      autoCleanup: values.autoCleanup ?? "false",
+      aiProvider: provider.id,
+      aiConfigured: provider.isConfigured(),
+      loadError: null,
+    });
+  } catch (error) {
+    console.error("Settings loader failed", error);
+    const provider = getAIProvider();
+    return json({
+      competitorTerms: "",
+      autoCleanup: "false",
+      aiProvider: provider.id,
+      aiConfigured: provider.isConfigured(),
+      loadError: "Some data could not be loaded. Your store data is safe. Try refreshing or run analysis again.",
+    });
+  }
 }
 
 export async function action({ request }: ActionFunctionArgs) {
   const { session } = await authenticate.admin(request);
   const shop = await ensureShop(prisma, session.shop);
   const form = await request.formData();
+  const appSetting = getDelegate(prisma, "appSetting");
+  if (!appSetting?.upsert) return redirect("/app/settings");
   for (const key of ["competitorTerms", "autoCleanup"]) {
-    await prisma.appSetting.upsert({
+    await appSetting.upsert({
       where: { shopId_key: { shopId: shop.id, key } },
       update: { value: String(form.get(key) ?? "") },
       create: { shopId: shop.id, key, value: String(form.get(key) ?? "") },
@@ -51,11 +70,16 @@ export default function Settings() {
       <Form method="post" id="settings-form">
         <BlockStack gap="400">
           <div className="cia-two-grid">
+            {data.loadError ? (
+              <Card>
+                <Text as="p" variant="bodyMd" tone="critical">{data.loadError}</Text>
+              </Card>
+            ) : null}
             <Card>
               <BlockStack gap="300">
                 <SectionHeader
                   title="Data Sources"
-                  description="Connect Shopify products, orders, customers, and imported buyer questions from the data hub."
+                  description="Connect Shopify products, order notes when available, and imported buyer questions from the data hub."
                 />
                 <Button url="/app/import">Open data hub</Button>
               </BlockStack>

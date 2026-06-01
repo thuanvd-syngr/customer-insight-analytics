@@ -21,6 +21,7 @@ import { getDevPlanOverride, resolvePlan, type PlanId } from "~/lib/billing";
 import { PLANS } from "~/lib/billing/plans";
 import { faqToHtml, generateFaqFromOpportunity, type GeneratedFaq } from "~/lib/faq-generator";
 import { ensureShop, getLatestRun, parseRun } from "~/lib/shop.server";
+import { publishGeneratedFaq, rollbackGeneratedFaq } from "~/lib/shopify-publish.server";
 import { EMPTY_INSIGHT, type KeywordGroupId } from "~/lib/types";
 import { authenticate } from "~/shopify.server";
 
@@ -32,6 +33,9 @@ type GeneratedFaqRecord = {
   answerText: string;
   answerHtml: string;
   status: string;
+  publishTarget: string;
+  publishRef: string | null;
+  error: string | null;
   createdAt: Date | string;
   publishedAt: Date | string | null;
 };
@@ -48,12 +52,13 @@ function generatedFaqModel() {
       findMany: typeof prisma.generatedFaq.findMany;
       create: typeof prisma.generatedFaq.create;
       updateMany: typeof prisma.generatedFaq.updateMany;
+      update: typeof prisma.generatedFaq.update;
     };
   }).generatedFaq;
 }
 
 async function getContext(request: Request) {
-  const { session } = await authenticate.admin(request);
+  const { session, admin } = await authenticate.admin(request);
   const shop = await ensureShop(prisma, session.shop);
   const plan = resolvePlan({
     activePlanId: shop.plan as PlanId,
@@ -61,7 +66,7 @@ async function getContext(request: Request) {
     devOverrideEnabled: process.env.ENABLE_DEV_PLAN_OVERRIDE === "true",
     isProduction: process.env.NODE_ENV === "production",
   });
-  return { shop, plan };
+  return { shop, plan, admin };
 }
 
 function parseSaved(value?: string): GeneratedFaq[] {
@@ -125,11 +130,13 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
 export async function action({ request }: ActionFunctionArgs) {
   try {
-    const { shop, plan } = await getContext(request);
+    const { shop, plan, admin } = await getContext(request);
     const form = await request.formData();
     const intent = String(form.get("intent") ?? "generate");
     const groupId = String(form.get("groupId") ?? "shipping") as KeywordGroupId;
     const question = String(form.get("question") ?? "What should customers know before buying?");
+    const productId = String(form.get("productId") ?? "") || null;
+    const productTitle = String(form.get("productTitle") ?? "") || null;
     const faq = generateFaqFromOpportunity({
       groupId,
       label: groupId,
@@ -169,6 +176,19 @@ export async function action({ request }: ActionFunctionArgs) {
       return redirect("/app/faq");
     }
 
+    if (intent === "publish") {
+      const id = String(form.get("id") ?? "");
+      const target = String(form.get("publishTarget") ?? "metafield") as "metafield" | "append_description" | "faq_block";
+      await publishGeneratedFaq({ db: prisma, admin, shopId: shop.id, faqId: id, target });
+      return redirect("/app/faq");
+    }
+
+    if (intent === "rollback") {
+      const id = String(form.get("id") ?? "");
+      await rollbackGeneratedFaq({ db: prisma, admin, shopId: shop.id, faqId: id });
+      return redirect("/app/faq");
+    }
+
     if (intent === "save") {
       const faqModel = generatedFaqModel();
       if (faqModel) {
@@ -176,6 +196,8 @@ export async function action({ request }: ActionFunctionArgs) {
           data: {
             shopId: shop.id,
             groupId,
+            productId,
+            productTitle,
             question: generated.question,
             answerText: generated.answer,
             answerHtml: faqToHtml(generated),
@@ -203,16 +225,33 @@ export async function action({ request }: ActionFunctionArgs) {
       const faqModel = generatedFaqModel();
       const run = await getLatestRun(prisma, shop.id);
       const insight = parseRun(run) ?? EMPTY_INSIGHT;
-      const source = insight.faqOpportunities.length
+      const source = insight.contentGaps.length
+        ? insight.contentGaps.flatMap((gap) =>
+            gap.missingSections.slice(0, 2).map((section) => ({
+              groupId: groupIdFromSection(section),
+              question: `What should customers know about ${section.toLowerCase()} for ${gap.productTitle}?`,
+              rationale: `Product content is missing ${section}.`,
+              frequency: gap.contentGapScore,
+              hasContent: false,
+              priority: gap.contentGapScore,
+              productId: gap.productId,
+              productTitle: gap.productTitle,
+            })),
+          )
+        : insight.faqOpportunities.length
         ? insight.faqOpportunities
         : insight.questionOpportunities;
       if (faqModel) {
         await Promise.all(source.slice(0, 8).map((item) => {
           const draft = generateFaqFromOpportunity(item);
+          const itemProductId = (item as { productId?: unknown }).productId;
+          const itemProductTitle = (item as { productTitle?: unknown }).productTitle;
           return faqModel.create({
             data: {
               shopId: shop.id,
               groupId: item.groupId,
+              productId: typeof itemProductId === "string" ? itemProductId : null,
+              productTitle: typeof itemProductTitle === "string" ? itemProductTitle : null,
               question: draft.question,
               answerText: draft.answer,
               answerHtml: faqToHtml(draft),
@@ -233,6 +272,21 @@ export async function action({ request }: ActionFunctionArgs) {
     console.error("FAQ route action failed", error);
     return redirect("/app/faq");
   }
+}
+
+function groupIdFromSection(section: string): KeywordGroupId {
+  const value = section.toLowerCase();
+  if (value.includes("shipping")) return "shipping";
+  if (value.includes("delivery")) return "delivery";
+  if (value.includes("return")) return "return";
+  if (value.includes("refund")) return "refund";
+  if (value.includes("size")) return "size";
+  if (value.includes("ingredient")) return "ingredient";
+  if (value.includes("comparison") || value.includes("quality")) return "compare";
+  if (value.includes("payment")) return "payment";
+  if (value.includes("stock")) return "stock";
+  if (value.includes("usage")) return "usage";
+  return "shipping";
 }
 
 /** Presentational: derive a priority level from either opportunity shape. */
@@ -264,15 +318,15 @@ export default function FaqGenerator() {
 
   return (
     <AppPage
-      title="FAQ Revenue Engine"
-      subtitle="Turn repeated purchase questions into revenue recovery content."
+      title="Revenue Recovery Content Engine"
+      subtitle="Turn buying objections into content that recovers revenue."
       primaryAction={
         items.length > 0 ? (
           <Form method="post">
             <input type="hidden" name="intent" value="bulk-generate" />
             <input type="hidden" name="groupId" value={source[0].groupId} />
             <input type="hidden" name="question" value={generateFaqFromOpportunity(source[0]).question} />
-            <Button submit variant="primary">Bulk generate</Button>
+            <Button submit variant="primary">Create Revenue Recovery Content</Button>
           </Form>
         ) : (
           <Button url="/app/import" variant="primary">Add customer questions</Button>
@@ -285,14 +339,14 @@ export default function FaqGenerator() {
           <InlineStack align="space-between" blockAlign="center" wrap={false}>
             <BlockStack gap="050">
               <Text as="p" variant="headingSm">
-                Generator engine
+                Content engine
               </Text>
               <Text as="p" variant="bodySm" tone="subdued">
                 Rule-based answers with optional AI rewrites when configured
               </Text>
             </BlockStack>
             <InlineStack gap="200" blockAlign="center">
-              <Badge tone="info">{`${formatNumber(items.length)} opportunities`}</Badge>
+              <Badge tone="info">{`${formatNumber(items.length)} content opportunities`}</Badge>
               <Badge tone="success">{`${formatNumber(stats.prepared)} prepared`}</Badge>
               <Badge tone={aiConfigured ? "success" : "info"}>
                 {aiConfigured && aiProvider !== "mock" ? `AI provider: ${aiProvider}` : "Rule-based mode"}
@@ -303,21 +357,73 @@ export default function FaqGenerator() {
         </Card>
 
         <BlockStack gap="300">
+          {contentGaps.length > 0 ? (
+            <>
+              <SectionHeader
+                title="What should I fix today?"
+                description="Product content gaps ranked by customer demand, expected impact, and time to fix."
+              />
+              <InlineGrid columns={{ xs: 1, md: 2 }} gap="400">
+                {contentGaps.slice(0, 4).map((gap) => {
+                  const firstSection = gap.missingSections[0] ?? "FAQ";
+                  const fixGroupId = groupIdFromSection(firstSection);
+                  return (
+                    <Card key={`${gap.productId ?? gap.productTitle}-${firstSection}`}>
+                      <BlockStack gap="200">
+                        <InlineStack align="space-between" blockAlign="start" wrap={false} gap="200">
+                          <BlockStack gap="050">
+                            <Text as="h3" variant="headingMd">{gap.productTitle}</Text>
+                            <Text as="p" variant="bodySm" tone="subdued">{firstSection}</Text>
+                          </BlockStack>
+                          <Badge tone={gap.contentGapScore >= 67 ? "critical" : gap.contentGapScore >= 34 ? "warning" : "info"}>
+                            {`${gap.contentGapScore}/100 gap`}
+                          </Badge>
+                        </InlineStack>
+                        <InlineGrid columns={{ xs: 1, sm: 3 }} gap="200">
+                          <BlockStack gap="050">
+                            <Text as="span" variant="bodySm" tone="subdued">Expected impact</Text>
+                            <Text as="span" variant="headingSm">{gap.expectedImpact ?? moneyRange(gap.estimatedLow, gap.estimatedHigh)}</Text>
+                          </BlockStack>
+                          <BlockStack gap="050">
+                            <Text as="span" variant="bodySm" tone="subdued">Time to fix</Text>
+                            <Text as="span" variant="headingSm">{gap.timeToFix ?? "20 min"}</Text>
+                          </BlockStack>
+                          <BlockStack gap="050">
+                            <Text as="span" variant="bodySm" tone="subdued">Missing</Text>
+                            <Text as="span" variant="headingSm">{gap.missingSections.slice(0, 2).join(", ")}</Text>
+                          </BlockStack>
+                        </InlineGrid>
+                        <Form method="post">
+                          <input type="hidden" name="intent" value="save" />
+                          <input type="hidden" name="groupId" value={fixGroupId} />
+                          <input type="hidden" name="productId" value={gap.productId ?? ""} />
+                          <input type="hidden" name="productTitle" value={gap.productTitle} />
+                          <input type="hidden" name="question" value={`What should customers know about ${firstSection.toLowerCase()} for ${gap.productTitle}?`} />
+                          <Button submit variant="primary">Generate Fix</Button>
+                        </Form>
+                      </BlockStack>
+                    </Card>
+                  );
+                })}
+              </InlineGrid>
+            </>
+          ) : null}
+
           <SectionHeader
-              title="Recommended Revenue FAQs"
-            description="FAQ opportunities ranked by demand, impacted products, priority, and recovery impact."
+              title="Revenue Recovery Content"
+            description="Content opportunities ranked by question demand, affected customers, revenue impact, products impacted, and draft status."
           />
 
           {items.length === 0 ? (
             <Card>
               <EmptyInsight
-                heading="FAQ opportunities will appear here"
+                heading="Revenue recovery content opportunities will appear here"
                 primaryActionLabel="Add customer questions"
                 primaryActionUrl="/app/import"
                 secondaryActionLabel="View dashboard"
                 secondaryActionUrl="/app"
               >
-                <p>Once we analyze your customer conversations, the top unanswered questions will appear here as ready-to-publish FAQ drafts.</p>
+                <p>Analyze customer questions to identify lost sales and create recovery content drafts.</p>
               </EmptyInsight>
             </Card>
           ) : (
@@ -353,13 +459,13 @@ export default function FaqGenerator() {
                           </Text>
                         ) : null}
                         {typeof trend === "number" ? <TrendIndicator value={trend} suffix="7d" /> : null}
-                        <Badge tone="info">Draft</Badge>
+                        <Badge tone="info">Generated status: draft</Badge>
                       </InlineStack>
 
                       <InlineGrid columns={{ xs: 1, sm: 3 }} gap="200">
                         <BlockStack gap="050">
                           <Text as="span" variant="bodySm" tone="subdued">
-                            Customer demand
+                            Question demand
                           </Text>
                           <Text as="span" variant="headingSm">
                             {typeof frequency === "number" ? formatNumber(frequency) : "Ready to analyze customer questions"}
@@ -367,12 +473,12 @@ export default function FaqGenerator() {
                         </BlockStack>
                         <BlockStack gap="050">
                           <Text as="span" variant="bodySm" tone="subdued">
-                            Recovery impact
+                            Revenue impact
                           </Text>
                           <Text as="span" variant="headingSm">
                             {questionOpportunity
                               ? `${moneyRange(questionOpportunity.lowEstimate, questionOpportunity.highEstimate)}/mo`
-                              : "Recovery estimate pending"}
+                              : "Connect orders"}
                           </Text>
                         </BlockStack>
                         <BlockStack gap="050">
@@ -413,7 +519,7 @@ export default function FaqGenerator() {
                           <input type="hidden" name="groupId" value={item.groupId} />
                           <input type="hidden" name="question" value={generated.question} />
                           <Button submit variant="primary">
-                            Generate
+                            Create Content
                           </Button>
                         </Form>
                         <Button disabled>Edit</Button>
@@ -441,8 +547,8 @@ export default function FaqGenerator() {
         {generatedFaqs.length > 0 ? (
           <BlockStack gap="300">
             <SectionHeader
-              title="Draft and Prepared FAQs"
-              description="Generated answers ready for merchant review before Shopify publishing"
+              title="Generated and Prepared Content"
+              description="Recovery content drafts ready for merchant review before Shopify publishing"
               trailing={<Badge tone="success">{`${formatNumber(generatedFaqs.length)} drafts`}</Badge>}
             />
             <Card>
@@ -454,9 +560,11 @@ export default function FaqGenerator() {
                       <InlineStack gap="200" blockAlign="center">
                         <Badge>{faq.groupId ?? "faq"}</Badge>
                         <Badge tone={["prepared", "published"].includes(faq.status) ? "success" : "info"}>
-                          {faq.status === "published" ? "prepared" : faq.status}
+                          {faq.status}
                         </Badge>
+                        {faq.productTitle ? <Badge>{faq.productTitle}</Badge> : null}
                       </InlineStack>
+                      <InlineStack gap="200">
                       {!["prepared", "published"].includes(faq.status) ? (
                         <Form method="post">
                           <input type="hidden" name="intent" value="prepare" />
@@ -466,6 +574,30 @@ export default function FaqGenerator() {
                           </Button>
                         </Form>
                       ) : null}
+                      {["prepared", "failed"].includes(faq.status) ? (
+                        <>
+                          <Form method="post">
+                            <input type="hidden" name="intent" value="publish" />
+                            <input type="hidden" name="id" value={faq.id} />
+                            <input type="hidden" name="publishTarget" value="metafield" />
+                            <Button submit size="slim" variant="primary">Publish metafield</Button>
+                          </Form>
+                          <Form method="post">
+                            <input type="hidden" name="intent" value="publish" />
+                            <input type="hidden" name="id" value={faq.id} />
+                            <input type="hidden" name="publishTarget" value="append_description" />
+                            <Button submit size="slim">Append description</Button>
+                          </Form>
+                        </>
+                      ) : null}
+                      {faq.status === "published" && faq.publishTarget === "append_description" ? (
+                        <Form method="post">
+                          <input type="hidden" name="intent" value="rollback" />
+                          <input type="hidden" name="id" value={faq.id} />
+                          <Button submit size="slim">Rollback</Button>
+                        </Form>
+                      ) : null}
+                      </InlineStack>
                     </InlineStack>
                     <BlockStack gap="100">
                       <Text as="h3" variant="headingSm">
@@ -474,6 +606,11 @@ export default function FaqGenerator() {
                       <Text as="p" variant="bodySm" tone="subdued">
                         {faq.answerText}
                       </Text>
+                      {faq.error ? (
+                        <Text as="p" variant="bodySm" tone="critical">
+                          {faq.error}
+                        </Text>
+                      ) : null}
                     </BlockStack>
                   </BlockStack>
                 ))}
@@ -511,7 +648,7 @@ export default function FaqGenerator() {
         {items.length > 0 ? (
           <StickyActionBar align="space-between">
             <Text as="span" variant="bodySm" tone="subdued">
-              {`${formatNumber(items.length)} opportunities ready to generate`}
+              {`${formatNumber(items.length)} opportunities ready for recovery content`}
             </Text>
             <InlineStack gap="200">
               <Form method="post">
@@ -531,7 +668,7 @@ export default function FaqGenerator() {
                 <input type="hidden" name="groupId" value={source[0].groupId} />
                 <input type="hidden" name="question" value={generateFaqFromOpportunity(source[0]).question} />
                 <Button submit variant="primary">
-                  Bulk generate
+                  Create Revenue Recovery Content
                 </Button>
               </Form>
             </InlineStack>

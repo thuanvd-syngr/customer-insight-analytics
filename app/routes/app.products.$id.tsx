@@ -165,7 +165,7 @@ export default function ProductConfusionDetail() {
                     ? moneyRange(contentGap.estimatedLow, contentGap.estimatedHigh)
                     : totalRevenueImpact > 0
                       ? money(totalRevenueImpact)
-                      : "Recovery estimate pending"
+                      : "Connect orders to unlock recovery estimates"
                 }
                 sublabel="Sum of revenue impact across related questions"
                 tone="critical"
@@ -184,7 +184,7 @@ export default function ProductConfusionDetail() {
                     tone={tone}
                     size="small"
                     label="Confusion score"
-                    caption="Higher means more friction"
+                    caption="Higher means more recovery priority"
                   />
                 </BlockStack>
               </Card>
@@ -291,7 +291,7 @@ export default function ProductConfusionDetail() {
                             <InlineStack gap="200" blockAlign="center">
                               <PriorityBadge level={item.severity} />
                               <Text as="span" variant="bodyMd" fontWeight="semibold">
-                                {item.highEstimate > 0 ? `${moneyRange(item.lowEstimate, item.highEstimate)}/mo` : "Recovery estimate pending"}
+                                {item.highEstimate > 0 ? `${moneyRange(item.lowEstimate, item.highEstimate)}/mo` : "Connect orders"}
                               </Text>
                             </InlineStack>
                           </InlineStack>

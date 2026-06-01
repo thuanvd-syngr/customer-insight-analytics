@@ -2,6 +2,7 @@ import type { PrismaClient } from "@prisma/client";
 
 import type { PlanId } from "./plans";
 import type { UsageSnapshot } from "./gating";
+import { getDelegate } from "~/lib/prisma-safe";
 
 export type UsageMetric = "messages" | "analyses" | "ai_summaries";
 
@@ -24,7 +25,9 @@ export async function incrementUsage(
   period: string,
   by = 1,
 ): Promise<number> {
-  const row = await db.usageCounter.upsert({
+  const usageCounter = getDelegate(db, "usageCounter");
+  if (!usageCounter?.upsert) return 0;
+  const row = await usageCounter.upsert({
     where: { shopId_metric_period: { shopId, metric, period } },
     update: { count: { increment: by } },
     create: { shopId, metric, period, count: by },
@@ -38,7 +41,9 @@ export async function getUsage(
   metric: UsageMetric,
   period: string,
 ): Promise<number> {
-  const row = await db.usageCounter.findUnique({
+  const usageCounter = getDelegate(db, "usageCounter");
+  if (!usageCounter?.findUnique) return 0;
+  const row = await usageCounter.findUnique({
     where: { shopId_metric_period: { shopId, metric, period } },
   });
   return row?.count ?? 0;

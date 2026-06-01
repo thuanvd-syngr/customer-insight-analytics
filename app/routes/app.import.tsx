@@ -1,10 +1,11 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { json, redirect } from "@remix-run/node";
-import { Form, useLoaderData, useNavigation } from "@remix-run/react";
+import { Form, useActionData, useLoaderData, useNavigation } from "@remix-run/react";
 import {
   BlockStack,
   Button,
   Card,
+  ProgressBar,
   Select,
   Text,
   TextField,
@@ -26,15 +27,38 @@ import {
 import { parseImport } from "~/lib/import";
 import { runAnalysis } from "~/lib/engine";
 import { syncShopifyData } from "~/lib/shopify-data.server";
+import type { ShopifySyncResult } from "~/lib/shopify-data.server";
+import type { ImportedMessage } from "@prisma/client";
 import {
-  buildSampleAnalysisInput,
   filterNewSampleMessages,
   getSampleMessages,
-  SAMPLE_PAGES,
+  isSampleDataEnabled,
 } from "~/lib/sample-data";
-import { ensureShop, markOnboarded, saveInsightRun } from "~/lib/shop.server";
+import { ensureShop, getLatestRun, markOnboarded, parseRun, saveInsightRun } from "~/lib/shop.server";
 import { authenticate } from "~/shopify.server";
 import { AppPage, KpiCard, SectionHeader } from "~/components";
+import { getDelegate, safeCount } from "~/lib/prisma-safe";
+import { orderSyncStatusText, productSyncStatusText } from "~/lib/sync-status";
+import { getShopifyProductSchemaDiagnostics } from "~/lib/schema-diagnostics.server";
+
+const CUSTOMER_APPROVAL_COPY = "Protected customer data approval required for customer profiles.";
+
+const EMPTY_SYNC: ShopifySyncResult = {
+  products: { ok: false, count: 0, skipped: true },
+  orders: { ok: false, count: 0, skipped: true },
+  customers: { ok: false, count: 0, skipped: true, reason: "Protected customer data not approved" },
+  messages: 0,
+};
+
+function parseStringArray(value?: string | null): string[] {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
+  } catch {
+    return [];
+  }
+}
 
 async function shopContext(request: Request) {
   const { session, admin } = await authenticate.admin(request);
@@ -46,24 +70,105 @@ async function shopContext(request: Request) {
     devOverrideEnabled: process.env.ENABLE_DEV_PLAN_OVERRIDE === "true",
     isProduction,
   });
-  return { shop, plan, admin };
+  return { shop, plan, admin, session };
 }
 
 export async function loader({ request }: LoaderFunctionArgs) {
-  const { shop, plan } = await shopContext(request);
-  const usage = await getUsageSnapshot(prisma, shop.id, plan, new Date());
-  const recentMessageCount = await prisma.importedMessage.count({ where: { shopId: shop.id } });
-  return json({ usage, plan, recentMessageCount });
+  try {
+    const { shop, plan, session } = await shopContext(request);
+    const url = new URL(request.url);
+    const debugMode = process.env.NODE_ENV !== "production" ? url.searchParams.get("debug") : null;
+    const now = new Date();
+    const usage = await getUsageSnapshot(prisma, shop.id, plan, now);
+    const [recentMessageCount, productCount, orderCount, latestRun] = await Promise.all([
+      safeCount(prisma, "importedMessage", { where: { shopId: shop.id } }),
+      safeCount(prisma, "shopifyProduct", { where: { shopId: shop.id } }),
+      safeCount(prisma, "shopifyOrder", { where: { shopId: shop.id } }),
+      getLatestRun(prisma, shop.id),
+    ]);
+    const latestInsight = parseRun(latestRun);
+    const analyzedProductCount = latestInsight?.contentGaps?.length ?? 0;
+    const analyzedMessageCount = latestRun?.messageCount ?? 0;
+    const isDataStale =
+      (productCount > 0 && productCount > analyzedProductCount) ||
+      (latestRun != null && recentMessageCount !== analyzedMessageCount);
+    const isDevMode = process.env.NODE_ENV !== "production";
+    const analysisGate = canRunAnalysis(usage);
+
+    const analysisDebug = debugMode === "analysis" ? {
+      analyzedProductCount,
+      currentProductCount: productCount,
+      analyzedMessageCount,
+      currentMessageCount: recentMessageCount,
+      analysesThisWeek: usage.analysesThisWeek,
+      weeklyLimit: usage.analysesThisWeek,
+      isDataStale,
+      weeklyLimitBlocking: !analysisGate.allowed,
+      reason: isDataStale
+        ? "Products or messages changed since last analysis — bypass active"
+        : !analysisGate.allowed
+          ? "Weekly limit reached and data is current"
+          : "ok — analysis can run normally",
+    } : null;
+
+    return json({
+      usage,
+      plan,
+      recentMessageCount,
+      productCount,
+      orderCount,
+      isDataStale,
+      analysisGateAllowed: analysisGate.allowed,
+      isDevMode,
+      lastSync: null,
+      loadError: null,
+      sampleDataEnabled: isSampleDataEnabled(),
+      analysisDebug,
+      syncDebug: debugMode === "sync"
+        ? {
+            productsDelegateAvailable: Boolean(getDelegate(prisma, "shopifyProduct")?.upsert),
+            productsCountInDb: productCount,
+            expectedScopes: ["read_products", "read_orders", "read_content"],
+            grantedScopes: session.scope ?? "",
+            sampleDataEnabled: isSampleDataEnabled(),
+          }
+        : null,
+      schemaDebug: debugMode === "schema"
+        ? await getShopifyProductSchemaDiagnostics(prisma)
+        : null,
+    });
+  } catch (error) {
+    console.error("Import loader failed", error);
+    return json({
+      usage: { plan: "free", messagesThisMonth: 0, analysesThisWeek: 0, aiSummariesThisMonth: 0 },
+      plan: "free",
+      recentMessageCount: 0,
+      productCount: 0,
+      orderCount: 0,
+      isDataStale: false,
+      analysisGateAllowed: true,
+      isDevMode: process.env.NODE_ENV !== "production",
+      lastSync: null,
+      loadError: "Some data could not be loaded. Your store data is safe. Try refreshing or run analysis again.",
+      sampleDataEnabled: isSampleDataEnabled(),
+      analysisDebug: null,
+      syncDebug: null,
+      schemaDebug: null,
+    });
+  }
 }
 
 export async function action({ request }: ActionFunctionArgs) {
-  const { shop, plan, admin } = await shopContext(request);
+  const { shop, plan, admin, session } = await shopContext(request);
   const now = new Date();
   const form = await request.formData();
   const intent = String(form.get("intent") ?? "");
   const usage = await getUsageSnapshot(prisma, shop.id, plan, now);
 
   if (intent === "sample") {
+    if (!isSampleDataEnabled()) {
+      return json({ error: "Sample data is disabled for real-store testing." }, { status: 403 });
+    }
     const messages = getSampleMessages(now);
     const existing = await prisma.importedMessage.findMany({
       where: {
@@ -115,14 +220,33 @@ export async function action({ request }: ActionFunctionArgs) {
   }
 
   if (intent === "sync") {
-    await syncShopifyData(prisma, shop.id, admin);
-    return redirect("/app/import");
+    const sync = await syncShopifyData(prisma, shop.id, admin, {
+      shopDomain: shop.shopDomain,
+      grantedScopes: session.scope,
+    });
+    return json({ ok: true, sync });
   }
 
-  if (intent === "analyze") {
-    const gate = canRunAnalysis(usage);
+  if (intent === "analyze" || intent === "force-analyze") {
+    const isDevMode = process.env.NODE_ENV !== "production";
+    // Stale detection: products or messages changed since the last analysis snapshot.
+    // When stale, bypass the weekly limit — new data requires fresh analysis.
+    const [currentProductCount, currentMessageCount, latestRunForStale] = await Promise.all([
+      safeCount(prisma, "shopifyProduct", { where: { shopId: shop.id } }),
+      safeCount(prisma, "importedMessage", { where: { shopId: shop.id } }),
+      getLatestRun(prisma, shop.id),
+    ]);
+    const latestInsightForStale = parseRun(latestRunForStale);
+    const analyzedProductCount = latestInsightForStale?.contentGaps?.length ?? 0;
+    const isDataStale =
+      (currentProductCount > 0 && currentProductCount > analyzedProductCount) ||
+      (latestRunForStale != null && currentMessageCount !== (latestRunForStale.messageCount ?? 0));
+    const gate = canRunAnalysis(usage, { bypass: isDevMode || isDataStale });
     if (!gate.allowed) return json({ error: gate.reason }, { status: 403 });
-    const stored = await prisma.importedMessage.findMany({ where: { shopId: shop.id } });
+    const importedMessage = getDelegate(prisma, "importedMessage");
+    const stored = importedMessage?.findMany
+      ? await importedMessage.findMany({ where: { shopId: shop.id } })
+      : [];
     const [storedProducts, settings] = await Promise.all([
       prisma.shopifyProduct.findMany({ where: { shopId: shop.id }, orderBy: { updatedAt: "desc" }, take: 100 }),
       prisma.appSetting.findMany({ where: { shopId: shop.id } }),
@@ -138,26 +262,26 @@ export async function action({ request }: ActionFunctionArgs) {
           title: product.title,
           handle: product.handle ?? undefined,
           description: product.description ?? "",
+          tags: parseStringArray(product.tags),
+          productType: product.productType,
+          collections: parseStringArray(product.collections),
         }))
       : [];
-    const input =
-      stored.length === 0
-        ? buildSampleAnalysisInput(now)
-        : {
-            messages: stored.map((message) => ({
-              id: message.id,
-              content: message.content,
-              occurredAt: message.occurredAt,
-              source: message.source,
-              customerRef: message.customerRef,
-              externalId: message.externalId,
-            })),
-            products,
-            pages: SAMPLE_PAGES,
-            competitorTerms,
-            now,
-            windowDays: 30,
-          };
+    const input = {
+      messages: (stored as ImportedMessage[]).map((message) => ({
+        id: message.id,
+        content: message.content,
+        occurredAt: message.occurredAt,
+        source: message.source,
+        customerRef: message.customerRef,
+        externalId: message.externalId,
+      })),
+      products,
+      pages: [],
+      competitorTerms,
+      now,
+      windowDays: 30,
+    };
     await saveInsightRun(prisma, shop.id, runAnalysis(input));
     await incrementUsage(prisma, shop.id, "analyses", isoWeekPeriod(now), 1);
     await markOnboarded(prisma, shop.id);
@@ -168,14 +292,15 @@ export async function action({ request }: ActionFunctionArgs) {
 }
 
 export default function ImportPage() {
-  const { usage, recentMessageCount } = useLoaderData<typeof loader>();
+  const { usage, recentMessageCount, productCount, orderCount, isDataStale, analysisGateAllowed, isDevMode, lastSync, loadError, sampleDataEnabled, analysisDebug, syncDebug, schemaDebug } = useLoaderData<typeof loader>();
+  const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
   const [source, setSource] = useState("manual");
   const busy = navigation.state !== "idle";
   return (
     <AppPage
-      title="Data hub"
-      subtitle="Connect Shopify data, import conversations, and run revenue analysis."
+      title="Revenue Recovery Onboarding"
+      subtitle="Move from customer conversations to revenue recovery content in four steps."
       primaryAction={
         <Form method="post">
           <input type="hidden" name="intent" value="analyze" />
@@ -184,33 +309,143 @@ export default function ImportPage() {
       }
     >
       <BlockStack gap="500">
+        {loadError ? (
+          <Card>
+            <Text as="p" variant="bodyMd" tone="critical">
+              {loadError}
+            </Text>
+          </Card>
+        ) : null}
+        {isDataStale && !analysisGateAllowed ? (
+          <Card>
+            <BlockStack gap="200">
+              <Text as="p" variant="bodyMd" tone="caution">
+                <strong>New products or messages detected.</strong> Products were synced after the last analysis. A fresh analysis is required to generate product-level insights.
+              </Text>
+              <Form method="post">
+                <input type="hidden" name="intent" value="analyze" />
+                <Button variant="primary" submit loading={busy}>Run fresh analysis</Button>
+              </Form>
+            </BlockStack>
+          </Card>
+        ) : null}
+        {isDevMode && !analysisGateAllowed && !isDataStale ? (
+          <Card>
+            <BlockStack gap="200">
+              <Text as="p" variant="bodyMd" tone="caution">
+                Weekly analysis limit reached. In development mode you can force a re-run.
+              </Text>
+              <Form method="post">
+                <input type="hidden" name="intent" value="force-analyze" />
+                <Button submit loading={busy}>Force reanalyze (dev only)</Button>
+              </Form>
+            </BlockStack>
+          </Card>
+        ) : null}
+        {analysisDebug ? (
+          <Card>
+            <BlockStack gap="150">
+              <SectionHeader title="Analysis debug" description="Development-only. Accessible via ?debug=analysis" />
+              <Text as="p" variant="bodySm"><strong>Analyzed products (last run contentGaps):</strong> {analysisDebug.analyzedProductCount}</Text>
+              <Text as="p" variant="bodySm"><strong>Current products (DB):</strong> {analysisDebug.currentProductCount}</Text>
+              <Text as="p" variant="bodySm"><strong>Analyzed messages (last run messageCount):</strong> {analysisDebug.analyzedMessageCount}</Text>
+              <Text as="p" variant="bodySm"><strong>Current messages (DB):</strong> {analysisDebug.currentMessageCount}</Text>
+              <Text as="p" variant="bodySm"><strong>Analyses this week:</strong> {analysisDebug.analysesThisWeek}</Text>
+              <Text as="p" variant="bodySm"><strong>Analysis stale:</strong> {analysisDebug.isDataStale ? "yes" : "no"}</Text>
+              <Text as="p" variant="bodySm"><strong>Weekly limit blocking:</strong> {analysisDebug.weeklyLimitBlocking ? "yes" : "no"}</Text>
+              <Text as="p" variant="bodySm"><strong>Reason:</strong> {analysisDebug.reason}</Text>
+            </BlockStack>
+          </Card>
+        ) : null}
+        {actionData && "sync" in actionData ? (
+          <Card>
+            <BlockStack gap="200">
+              <SectionHeader title="Sync status" description="Product and order analysis continues even when protected customer data is unavailable." />
+              <Text as="p" variant="bodyMd">
+                Products: {productSyncStatusText(actionData.sync.products)}
+              </Text>
+              <Text as="p" variant="bodyMd">
+                Orders: {orderSyncStatusText(actionData.sync.orders)}
+              </Text>
+              <Text as="p" variant="bodyMd" tone="subdued">
+                Customers skipped: {actionData.sync.customers.reason ?? CUSTOMER_APPROVAL_COPY}
+              </Text>
+              {actionData.sync.products.error || actionData.sync.orders.error ? (
+                <Text as="p" variant="bodySm" tone="critical">
+                  {actionData.sync.products.error
+                    ? `Products sync failed: ${actionData.sync.products.error}`
+                    : "Order access is unavailable. Product analysis will continue."}
+                </Text>
+              ) : null}
+            </BlockStack>
+          </Card>
+        ) : null}
+        {syncDebug ? (
+          <Card>
+            <BlockStack gap="150">
+              <SectionHeader title="Sync debug" description="Development-only diagnostics. No tokens or secrets are shown." />
+              <Text as="p" variant="bodySm">Products delegate available: {syncDebug.productsDelegateAvailable ? "yes" : "no"}</Text>
+              <Text as="p" variant="bodySm">Products count in DB: {syncDebug.productsCountInDb}</Text>
+              <Text as="p" variant="bodySm">Expected scopes: {syncDebug.expectedScopes.join(", ")}</Text>
+              <Text as="p" variant="bodySm">Granted scopes: {syncDebug.grantedScopes || "unknown"}</Text>
+              <Text as="p" variant="bodySm">Sample data enabled: {syncDebug.sampleDataEnabled ? "yes" : "no"}</Text>
+            </BlockStack>
+          </Card>
+        ) : null}
+        {schemaDebug ? (
+          <Card>
+            <BlockStack gap="150">
+              <SectionHeader title="Schema debug" description="Development-only schema diagnostics. No tokens or secrets are shown." />
+              <Text as="p" variant="bodySm">Prisma delegate available: {schemaDebug.delegateAvailable ? "yes" : "no"}</Text>
+              <Text as="p" variant="bodySm">ShopifyProduct columns found: {schemaDebug.dbColumns.join(", ") || "none"}</Text>
+              <Text as="p" variant="bodySm">Migration version: {schemaDebug.migrationVersion ?? "missing"}</Text>
+              <Text as="p" variant="bodySm">Compatibility mode: {schemaDebug.compatibilityMode ? "enabled" : "disabled"}</Text>
+              <Text as="p" variant="bodySm">tags: {schemaDebug.hasTags ? "yes" : "no"} / client: {schemaDebug.clientHasTags ? "yes" : "no"}</Text>
+              <Text as="p" variant="bodySm">productType: {schemaDebug.hasProductType ? "yes" : "no"} / client: {schemaDebug.clientHasProductType ? "yes" : "no"}</Text>
+              <Text as="p" variant="bodySm">collections: {schemaDebug.hasCollections ? "yes" : "no"} / client: {schemaDebug.clientHasCollections ? "yes" : "no"}</Text>
+              {schemaDebug.error ? (
+                <Text as="p" variant="bodySm" tone="critical">{schemaDebug.error}</Text>
+              ) : null}
+            </BlockStack>
+          </Card>
+        ) : null}
+        {actionData && "error" in actionData ? (
+          <Card>
+            <Text as="p" variant="bodyMd" tone="critical">
+              {actionData.error}
+            </Text>
+          </Card>
+        ) : null}
         <div className="cia-section-band">
           <BlockStack gap="300">
             <SectionHeader
-              title="Revenue recovery onboarding"
-              description="Follow the workflow from raw customer questions to prepared conversion fixes."
+              title="Recovery setup wizard"
+              description="Complete each step to find lost sales and create the content that recovers them."
             />
+            <ProgressBar progress={recentMessageCount > 0 ? 50 : 20} tone="primary" />
+            <div className="cia-progress-steps">
             {[
               ["1", "Import conversations", recentMessageCount > 0],
-              ["2", "Analyze", false],
-              ["3", "Generate actions", false],
-              ["4", "Prepare fixes", false],
+              ["2", "Analyze customer questions", false],
+              ["3", "Generate revenue opportunities", false],
+              ["4", "Publish recovery content", false],
             ].map(([step, label, done]) => (
-              <div className="cia-queue-row" key={String(step)}>
+              <div className="cia-muted-panel" key={String(step)}>
+                <BlockStack gap="150">
                 <div className="cia-rank">{String(step)}</div>
-                <BlockStack gap="050">
                   <Text as="h3" variant="headingSm">
                     {String(label)}
                   </Text>
                   <Text as="p" variant="bodySm" tone="subdued">
-                    {done ? "Completed" : "Next step in the recovery workflow"}
+                    {done ? "Completed" : "Next recovery step"}
                   </Text>
-                </BlockStack>
                 <Button url={step === "1" ? "/app/import" : step === "2" ? "/app/import" : "/app/faq"}>
                   {done ? "Review" : "Start"}
                 </Button>
+                </BlockStack>
               </div>
             ))}
+            </div>
           </BlockStack>
         </div>
 
@@ -229,8 +464,8 @@ export default function ImportPage() {
           />
           <KpiCard
             label="Data status"
-            value={recentMessageCount > 0 ? "Ready" : "Store health needs order history"}
-            detail="Sync Shopify data or load sample messages"
+            value={productCount > 0 || recentMessageCount > 0 ? "Ready" : "Sync product and order data"}
+            detail={`${productCount} products · ${orderCount} orders · ${recentMessageCount} questions`}
             tone={recentMessageCount > 0 ? "success" : "warning"}
           />
         </div>
@@ -239,27 +474,36 @@ export default function ImportPage() {
           <Card>
             <Form method="post">
               <BlockStack gap="300">
-                <SectionHeader title="Connect Shopify data" description="Sync products, orders, and customers for product-level recovery insights." />
+                <SectionHeader title="Step 1: Sync product and order data" description="Product content sync, product gap analysis, and order notes if available." />
                 <input type="hidden" name="intent" value="sync" />
-                <Button submit loading={busy} variant="primary">Sync Shopify data</Button>
+                <Button submit loading={busy} variant="primary">Sync product and order data</Button>
+                <Text as="p" variant="bodySm" tone="subdued">
+                  Supported now: product content sync, product gap analysis, imported customer questions, and order notes if available.
+                </Text>
+                <Text as="p" variant="bodySm" tone="subdued">
+                  Not available yet: customer profile analysis. {CUSTOMER_APPROVAL_COPY}
+                </Text>
+                <Button url="/app" disabled={busy}>Continue with product analysis</Button>
               </BlockStack>
             </Form>
           </Card>
-          <Card>
-            <Form method="post">
-              <BlockStack gap="300">
-                <SectionHeader title="Load sample data" description="Explore the revenue recovery workflow with realistic sample conversations." />
-                <input type="hidden" name="intent" value="sample" />
-                <Button submit loading={busy}>Load sample data</Button>
-              </BlockStack>
-            </Form>
-          </Card>
+          {sampleDataEnabled ? (
+            <Card>
+              <Form method="post">
+                <BlockStack gap="300">
+                  <SectionHeader title="Preview with sample conversations" description="Explore the recovery workflow before importing live customer questions." />
+                  <input type="hidden" name="intent" value="sample" />
+                  <Button submit loading={busy}>Load sample data</Button>
+                </BlockStack>
+              </Form>
+            </Card>
+          ) : null}
         </div>
 
         <Card>
           <Form method="post">
             <BlockStack gap="300">
-              <SectionHeader title="Add customer questions" description="Paste support messages, chats, emails, or CSV rows." />
+              <SectionHeader title="Step 1: Import conversations" description="Paste support messages, chats, emails, or CSV rows." />
               <input type="hidden" name="intent" value="import" />
               <Select
                 label="Source"
@@ -277,7 +521,7 @@ export default function ImportPage() {
         <Card>
           <Form method="post">
             <BlockStack gap="300">
-              <SectionHeader title="Run analysis" description="Run analysis to find revenue opportunities." />
+              <SectionHeader title="Step 2: Analyze customer questions" description="Identify lost sales, affected products, and recovery actions." />
               <input type="hidden" name="intent" value="analyze" />
               <Button variant="primary" submit loading={busy}>Run analysis</Button>
             </BlockStack>

@@ -1,6 +1,6 @@
 import { BlockStack, Button, InlineGrid, InlineStack, Text } from "@shopify/polaris";
 
-import { moneyRange } from "./format";
+import { moneyRange, formatNumber } from "./format";
 import { MetricBadge } from "./MetricBadge";
 
 export function HeroRevenueCard({
@@ -26,7 +26,7 @@ export function HeroRevenueCard({
               Revenue Opportunity
             </Text>
             <Text as="h2" variant="heading2xl">
-              {hasEstimate ? `${moneyRange(low, high)}/mo` : "Recovery estimate pending"}
+              {hasEstimate ? `${moneyRange(low, high)}/mo` : "Connect orders to unlock recovery estimates"}
             </Text>
           </BlockStack>
           <MetricBadge tone={hasEstimate ? "success" : "warning"}>
@@ -39,7 +39,7 @@ export function HeroRevenueCard({
               Customers affected
             </Text>
             <Text as="p" variant="headingLg">
-              {customersAffected > 0 ? customersAffected.toLocaleString("en-US") : "Store health needs order history"}
+              {customersAffected > 0 ? formatNumber(customersAffected) : "Store health needs order history"}
             </Text>
           </div>
           <div className="cia-muted-panel">

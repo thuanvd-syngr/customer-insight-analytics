@@ -37,7 +37,7 @@ export function ActionCard({
           {customersAffected > 0 ? `${customersAffected} customers affected` : "Add customer questions to unlock this recommendation"}
         </Text>
         <Text as="p" variant="headingLg" tone={hasEstimate ? "success" : "subdued"}>
-          {hasEstimate ? `${moneyRange(low, high)}/mo` : "Recovery estimate pending"}
+          {hasEstimate ? `${moneyRange(low, high)}/mo` : "Connect orders to unlock recovery estimates"}
         </Text>
         <Text as="p" variant="bodyMd">
           {action}

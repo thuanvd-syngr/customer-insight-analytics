@@ -16,7 +16,7 @@ const DEFAULT_IMAGE =
 
 /**
  * Consistent empty state used when a screen has no analyzed data yet.
- * Pass a <Form> via children for POST-based actions (e.g. load sample data).
+ * Pass a <Form> via children for POST-based actions.
  */
 export function EmptyInsight({
   heading,

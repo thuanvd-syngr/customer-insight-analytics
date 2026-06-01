@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   compactMoney,
+  formatCompactMoney,
+  formatMoneyRange,
   formatNumber,
   formatPercent,
   money,
@@ -20,9 +22,9 @@ describe("money / number formatting", () => {
   });
 
   it("formats compact currency", () => {
-    const v = compactMoney(1200);
-    expect(v.startsWith("$")).toBe(true);
-    expect(v.toUpperCase()).toContain("1.2K");
+    expect(compactMoney(1200)).toBe("$1.2K");
+    expect(compactMoney(380)).toBe("$380");
+    expect(compactMoney(1000)).toBe("$1K");
   });
 
   it("formats plain numbers with separators", () => {
@@ -77,5 +79,64 @@ describe("tone mappings", () => {
   });
   it("returns a CSS variable for SVG fills", () => {
     expect(toneVar("success")).toContain("var(--p-color");
+  });
+});
+
+describe("formatCompactMoney — deterministic, no Intl compact", () => {
+  it("formats sub-1K as exact dollars", () => {
+    expect(formatCompactMoney(380)).toBe("$380");
+    expect(formatCompactMoney(0)).toBe("$0");
+    expect(formatCompactMoney(99)).toBe("$99");
+    expect(formatCompactMoney(999)).toBe("$999");
+  });
+
+  it("formats 1000 as $1K without trailing .0", () => {
+    expect(formatCompactMoney(1000)).toBe("$1K");
+    expect(formatCompactMoney(2000)).toBe("$2K");
+  });
+
+  it("formats non-round thousands with one decimal", () => {
+    expect(formatCompactMoney(1200)).toBe("$1.2K");
+    expect(formatCompactMoney(2500)).toBe("$2.5K");
+  });
+
+  it("never produces .0K or .0M", () => {
+    expect(formatCompactMoney(1000)).not.toContain(".0K");
+    expect(formatCompactMoney(2000)).not.toContain(".0K");
+    expect(formatCompactMoney(1_000_000)).not.toContain(".0M");
+    expect(formatCompactMoney(3_000_000)).not.toContain(".0M");
+  });
+
+  it("formats millions", () => {
+    expect(formatCompactMoney(1_000_000)).toBe("$1M");
+    expect(formatCompactMoney(1_500_000)).toBe("$1.5M");
+  });
+
+  it("is the same function as compactMoney (alias)", () => {
+    expect(formatCompactMoney(1200)).toBe(compactMoney(1200));
+    expect(formatCompactMoney(380)).toBe(compactMoney(380));
+  });
+});
+
+describe("formatMoneyRange — compact range, SSR-safe", () => {
+  it("formats mixed scale range", () => {
+    expect(formatMoneyRange(380, 1000)).toBe("$380-$1K");
+  });
+
+  it("formats same-scale ranges", () => {
+    expect(formatMoneyRange(103, 276)).toBe("$103-$276");
+    expect(formatMoneyRange(1000, 2500)).toBe("$1K-$2.5K");
+  });
+
+  it("returns fallback when both values are 0", () => {
+    expect(formatMoneyRange(0, 0)).toContain("Connect orders");
+    expect(formatMoneyRange(null, null)).toContain("Connect orders");
+  });
+
+  it("insight recovery impact uses compact format (no .0K)", () => {
+    // Regression guard: the Insights KPI used compactMoney which produced "$380.0-$1.0K"
+    // on Node.js but "$380-$1K" on browsers, causing React hydration errors.
+    expect(formatMoneyRange(380, 1000)).not.toContain(".0");
+    expect(formatMoneyRange(1000, 2000)).not.toContain(".0");
   });
 });

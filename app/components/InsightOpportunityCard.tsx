@@ -44,7 +44,7 @@ export function InsightOpportunityCard({
           <TrendIndicator value={trend} suffix="vs last week" />
         </InlineStack>
         <Text as="p" variant="headingLg" tone={hasEstimate ? "success" : "subdued"}>
-          {hasEstimate ? `${moneyRange(low, high)}/mo` : "Recovery estimate pending"}
+          {hasEstimate ? `${moneyRange(low, high)}/mo` : "Connect orders to unlock recovery estimates"}
         </Text>
         {quote ? (
           <Box background="bg-surface-secondary" borderRadius="200" padding="300">
@@ -67,7 +67,7 @@ export function InsightOpportunityCard({
             <input type="hidden" name="groupId" value={groupId} />
             <input type="hidden" name="question" value={`What should customers know about ${topic.toLowerCase()}?`} />
             <Button submit variant="primary">
-              Generate FAQ
+              Generate Fix
             </Button>
           </Form>
           <Button url="/app/products">View products</Button>
