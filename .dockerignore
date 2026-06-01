@@ -1,0 +1,17 @@
+node_modules
+build
+.cache
+.git
+.gitignore
+.env
+.env.*
+!.env.production.example
+.shopify
+coverage
+*.md
+!README.md
+Dockerfile
+.dockerignore
+npm-debug.log*
+.eslintcache
+tests

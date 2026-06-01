@@ -1,0 +1,66 @@
+{
+  "name": "customer-insight-analytics",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Customer Insight Analytics — find why customers don't buy. Shopify embedded app with a rule-based insight engine and optional batch AI summaries.",
+  "license": "UNLICENSED",
+  "type": "module",
+  "engines": {
+    "node": ">=20.10 <23"
+  },
+  "scripts": {
+    "build": "remix vite:build",
+    "dev": "shopify app dev",
+    "config:link": "shopify app config link",
+    "config:use": "shopify app config use",
+    "config:push": "shopify app config push",
+    "generate": "shopify app generate",
+    "deploy": "shopify app deploy",
+    "env": "shopify app env",
+    "prisma": "prisma",
+    "db:migrate": "prisma migrate dev",
+    "db:deploy": "prisma migrate deploy",
+    "db:studio": "prisma studio",
+    "setup": "prisma generate && prisma migrate deploy",
+    "seed": "tsx scripts/seed-sample-data.ts",
+    "start": "node ./scripts/start-production.mjs",
+    "check:env": "node ./scripts/check-env.mjs",
+    "docker:build": "docker build -t customer-insight-analytics .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint --cache --cache-location ./node_modules/.cache/eslint .",
+    "postinstall": "prisma generate"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.19.0",
+    "@remix-run/node": "^2.17.4",
+    "@remix-run/react": "^2.17.4",
+    "@remix-run/serve": "^2.17.4",
+    "@shopify/app-bridge-react": "^4.2.10",
+    "@shopify/polaris": "^13.9.5",
+    "@shopify/shopify-app-remix": "^4.2.0",
+    "@shopify/shopify-app-session-storage-prisma": "^9.0.0",
+    "isbot": "^5.1.0",
+    "prisma": "^6.19.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@remix-run/dev": "^2.17.4",
+    "@types/node": "^22.10.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "eslint": "^8.57.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vite": "^6.3.6",
+    "vite-tsconfig-paths": "^5.1.4",
+    "vitest": "^4.1.7"
+  },
+  "workspaces": [],
+  "trustedDependencies": [
+    "@shopify/plugin-cloudflare"
+  ],
+  "author": "Customer Insight Analytics"
+}

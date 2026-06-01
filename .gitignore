@@ -1,0 +1,23 @@
+node_modules
+/build
+/.cache
+/public/build
+.env
+.env.*
+!.env.example
+!.env.production.example
+.DS_Store
+
+# Shopify CLI
+.shopify
+*.local
+
+# Prisma local dev db (if SQLite ever used locally)
+*.db
+*.db-journal
+
+# Logs / misc
+npm-debug.log*
+yarn-error.log*
+.eslintcache
+coverage

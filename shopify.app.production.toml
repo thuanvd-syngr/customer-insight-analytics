@@ -1,0 +1,26 @@
+client_id = "YOUR_PRODUCTION_CLIENT_ID"
+name = "Customer Insight Analytics"
+handle = "customer-insight-analytics"
+application_url = "https://customer-insight.example.com"
+embedded = true
+
+[access_scopes]
+scopes = "read_products,read_orders,read_customers,read_content"
+
+[auth]
+redirect_urls = [
+  "https://customer-insight.example.com/auth/callback",
+  "https://customer-insight.example.com/auth/shopify/callback",
+  "https://customer-insight.example.com/api/auth/callback"
+]
+
+[webhooks]
+api_version = "2026-01"
+
+[[webhooks.subscriptions]]
+topics = ["app/uninstalled"]
+uri = "/webhooks/app/uninstalled"
+
+[[webhooks.subscriptions]]
+topics = ["app/scopes_update"]
+uri = "/webhooks/app/scopes_update"

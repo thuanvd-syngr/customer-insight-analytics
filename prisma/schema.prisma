@@ -1,0 +1,199 @@
+// Customer Insight Analytics — Prisma schema
+// PostgreSQL. Minimal V1 models for a rule-based insight engine + optional batch AI.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/// Shopify offline/online session storage (required shape for
+/// @shopify/shopify-app-session-storage-prisma v9). Do not rename fields.
+model Session {
+  id                  String    @id
+  shop                String
+  state               String
+  isOnline            Boolean   @default(false)
+  scope               String?
+  expires             DateTime?
+  accessToken         String
+  userId              BigInt?
+  firstName           String?
+  lastName            String?
+  email               String?
+  accountOwner        Boolean   @default(false)
+  locale              String?
+  collaborator        Boolean?  @default(false)
+  emailVerified       Boolean?  @default(false)
+  refreshToken        String?
+  refreshTokenExpires DateTime?
+
+  @@index([shop])
+}
+
+/// One row per installed shop. The hub all app data hangs off.
+model Shop {
+  id            String    @id @default(cuid())
+  shopDomain    String    @unique
+  plan          String    @default("free") // free | starter | growth | pro
+  installedAt   DateTime  @default(now())
+  uninstalledAt DateTime?
+  onboardedAt   DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  messages ImportedMessage[]
+  runs     InsightRun[]
+  reports  WeeklyReport[]
+  settings AppSetting[]
+  usage    UsageCounter[]
+
+  @@index([shopDomain])
+}
+
+/// A single unit of customer "voice" the engine analyzes: an order note,
+/// a customer email, a product text blob, or an imported conversation line.
+model ImportedMessage {
+  id          String   @id @default(cuid())
+  shopId      String
+  shop        Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  source      String // order_note | customer_email | product_text | csv | manual
+  externalId  String? // e.g. shopify order/customer id
+  customerRef String? // hashed email or customer id (never store raw PII when avoidable)
+  content     String
+  rawMeta     String? // JSON string with extra context
+  occurredAt  DateTime // event time, used for trend windows
+  createdAt   DateTime @default(now())
+
+  @@index([shopId, occurredAt])
+  @@index([shopId, source])
+}
+
+/// One analysis pass. Holds a JSON snapshot plus normalized child findings.
+model InsightRun {
+  id           String    @id @default(cuid())
+  shopId       String
+  shop         Shop      @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  status       String    @default("completed") // running | completed | failed
+  messageCount Int       @default(0)
+  insightScore Int       @default(0)
+  windowDays   Int       @default(30)
+  summaryJson  String? // full InsightResult JSON snapshot
+  error        String?
+  startedAt    DateTime  @default(now())
+  finishedAt   DateTime?
+  createdAt    DateTime  @default(now())
+
+  keywordFindings  KeywordFinding[]
+  productFindings  ProductFinding[]
+  faqOpportunities FaqOpportunity[]
+
+  @@index([shopId, createdAt])
+}
+
+/// Aggregated frequency + trend for a keyword group within a run.
+model KeywordFinding {
+  id           String     @id @default(cuid())
+  runId        String
+  run          InsightRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  shopId       String
+  groupId      String // shipping | return | refund | ...
+  keyword      String // representative keyword/phrase
+  count        Int        @default(0)
+  prev7Count   Int        @default(0)
+  prev30Count  Int        @default(0)
+  trend7       Float      @default(0) // pct change vs previous 7d window
+  trend30      Float      @default(0) // pct change vs previous 30d window
+  exampleQuote String?
+  createdAt    DateTime   @default(now())
+
+  @@index([runId, groupId])
+  @@index([shopId, groupId])
+}
+
+/// Products that customers are most confused about within a run.
+model ProductFinding {
+  id             String     @id @default(cuid())
+  runId          String
+  run            InsightRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  shopId         String
+  productId      String? // shopify gid or null when unmatched
+  productTitle   String
+  mentionCount   Int        @default(0)
+  confusionScore Float      @default(0)
+  topGroups      String? // JSON array of groupIds
+  exampleQuote   String?
+  createdAt      DateTime   @default(now())
+
+  @@index([runId])
+  @@index([shopId])
+}
+
+/// A suggested FAQ entry the store is "missing": a topic asked about a lot
+/// but not covered by existing product/page content.
+model FaqOpportunity {
+  id         String     @id @default(cuid())
+  runId      String
+  run        InsightRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  shopId     String
+  groupId    String
+  question   String
+  rationale  String?
+  frequency  Int        @default(0)
+  hasContent Boolean    @default(false)
+  priority   Int        @default(0)
+  productId  String?
+  createdAt  DateTime   @default(now())
+
+  @@index([runId])
+  @@index([shopId, groupId])
+}
+
+/// A rendered weekly report. aiSummary is null unless a merchant generated one.
+model WeeklyReport {
+  id           String   @id @default(cuid())
+  shopId       String
+  shop         Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  runId        String?
+  weekStart    DateTime
+  weekEnd      DateTime
+  insightScore Int      @default(0)
+  dataJson     String // JSON snapshot used to render the report
+  aiSummary    String? // optional batch-generated narrative
+  aiProvider   String? // mock | groq | gemini
+  generatedAt  DateTime @default(now())
+  createdAt    DateTime @default(now())
+
+  @@index([shopId, weekStart])
+}
+
+/// Arbitrary per-shop key/value settings (AI provider toggle, competitor list, etc.).
+model AppSetting {
+  id        String   @id @default(cuid())
+  shopId    String
+  shop      Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  key       String
+  value     String // JSON-encoded or scalar
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([shopId, key])
+}
+
+/// Usage metering for plan gating. One row per (shop, metric, period bucket).
+model UsageCounter {
+  id        String   @id @default(cuid())
+  shopId    String
+  shop      Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  period    String // "2026-06" (month) or "2026-W23" (iso week)
+  metric    String // messages | analyses | ai_summaries
+  count     Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([shopId, metric, period])
+  @@index([shopId])
+}
