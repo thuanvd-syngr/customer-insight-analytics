@@ -15,6 +15,7 @@ node_modules
 # Prisma local dev db (if SQLite ever used locally)
 *.db
 *.db-journal
+docker-compose.yml
 
 # Logs / misc
 npm-debug.log*

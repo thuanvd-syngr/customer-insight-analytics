@@ -7,6 +7,8 @@ import { buildKeywordGroupResults } from "./keyword-engine";
 import { detectProductConfusion } from "./product-confusion";
 import { detectRevenueLeakage } from "./revenue-leakage";
 import { dailyVolume } from "./trend";
+import { buildQuestionOpportunities, buildRecommendedActions, buildRevenueOpportunity } from "~/lib/revenue-opportunity.server";
+import { buildCompetitorThreats, buildContentGapAnalysis } from "~/lib/recovery-engine.server";
 
 export function runAnalysis(input: AnalysisInput): InsightResult {
   const now = input.now ?? new Date();
@@ -22,8 +24,22 @@ export function runAnalysis(input: AnalysisInput): InsightResult {
     input.products,
     input.pages ?? [],
   );
-  const competitors = detectCompetitors(messages);
+  const competitors = detectCompetitors(messages, input.competitorTerms);
   const revenueLeakage = detectRevenueLeakage(keywordGroups);
+  const revenueOpportunity = buildRevenueOpportunity(keywordGroups);
+  const questionOpportunities = buildQuestionOpportunities(keywordGroups);
+  const recommendedActions = buildRecommendedActions(questionOpportunities);
+  const contentGaps = buildContentGapAnalysis({
+    products: productConfusion,
+    faqOpportunities,
+    questionOpportunities,
+  });
+  const competitorThreats = buildCompetitorThreats(
+    competitors,
+    productConfusion.filter((product) =>
+      product.topGroups.some((group) => group === "competitor" || group === "compare"),
+    ).length,
+  );
   const insightScore = computeInsightScore({
     messageCount: messages.length,
     keywordGroups,
@@ -46,6 +62,11 @@ export function runAnalysis(input: AnalysisInput): InsightResult {
     faqOpportunities,
     competitors,
     revenueLeakage,
+    revenueOpportunity,
+    questionOpportunities,
+    recommendedActions,
+    contentGaps,
+    competitorThreats,
     weeklyTrend: dailyVolume(input.messages, now, 7),
   };
 }

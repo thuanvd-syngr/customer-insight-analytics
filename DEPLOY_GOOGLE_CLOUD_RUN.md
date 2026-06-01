@@ -3,7 +3,7 @@
 ## 1. Create Cloud SQL Postgres
 
 ```bash
-gcloud sql instances create cia-postgres --database-version=POSTGRES_16 --tier=db-f1-micro --region=us-central1
+gcloud sql instances create cia-postgres --database-version=POSTGRES_16 --tier=db-f1-micro --region=asia-southeast1
 gcloud sql databases create customer_insight --instance=cia-postgres
 gcloud sql users set-password postgres --instance=cia-postgres --password='REPLACE_ME'
 ```
@@ -29,10 +29,10 @@ shopify app config push
 ## 3. Build and Deploy
 
 ```bash
-gcloud builds submit --tag us-central1-docker.pkg.dev/PROJECT_ID/apps/customer-insight-analytics
+gcloud builds submit --tag asia-southeast1-docker.pkg.dev/PROJECT_ID/apps/customer-insight-analytics
 gcloud run deploy customer-insight-analytics \
-  --image us-central1-docker.pkg.dev/PROJECT_ID/apps/customer-insight-analytics \
-  --region us-central1 \
+  --image asia-southeast1-docker.pkg.dev/PROJECT_ID/apps/customer-insight-analytics \
+  --region asia-southeast1 \
   --allow-unauthenticated \
   --set-env-vars NODE_ENV=production
 ```

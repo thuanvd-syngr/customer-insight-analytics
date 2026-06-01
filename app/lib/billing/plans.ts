@@ -16,6 +16,17 @@ export interface PlanFeatures {
   aiWeeklySummary: boolean;
   /** Whether report export is allowed. */
   exportReport: boolean;
+  competitorTracking: boolean;
+  faqGeneration: boolean;
+  revenueOpportunity: boolean;
+  contentGapDetection: boolean;
+  faqPublishing: boolean;
+  weeklyReports: boolean;
+  bulkPublishing: boolean;
+  teamFeatures: boolean;
+  executiveReports: boolean;
+  pdfExport: boolean;
+  priorityProcessing: boolean;
 }
 
 export interface PlanDefinition {
@@ -43,34 +54,67 @@ export const PLANS: Record<PlanId, PlanDefinition> = {
       analysisFrequency: "weekly",
       aiWeeklySummary: false,
       exportReport: false,
+      competitorTracking: false,
+      faqGeneration: false,
+      revenueOpportunity: false,
+      contentGapDetection: false,
+      faqPublishing: false,
+      weeklyReports: false,
+      bulkPublishing: false,
+      teamFeatures: false,
+      executiveReports: false,
+      pdfExport: false,
+      priorityProcessing: false,
     },
   },
   starter: {
     id: "starter",
     name: "Starter",
-    price: 9,
+    price: 29,
     trialDays: 7,
-    tagline: "Daily insights for growing stores.",
+    tagline: "Revenue opportunity and content gaps for growing stores.",
     features: {
       messagesPerMonth: 1000,
       analysesPerWeek: 7,
       analysisFrequency: "daily",
       aiWeeklySummary: false,
       exportReport: false,
+      competitorTracking: false,
+      faqGeneration: false,
+      revenueOpportunity: true,
+      contentGapDetection: true,
+      faqPublishing: false,
+      weeklyReports: false,
+      bulkPublishing: false,
+      teamFeatures: false,
+      executiveReports: false,
+      pdfExport: false,
+      priorityProcessing: false,
     },
   },
   growth: {
     id: "growth",
     name: "Growth",
-    price: 29,
+    price: 49,
     trialDays: 7,
-    tagline: "Weekly AI summaries on top of daily analysis.",
+    tagline: "FAQ publishing, competitor intelligence, and weekly reports.",
     features: {
       messagesPerMonth: 10000,
       analysesPerWeek: 7,
       analysisFrequency: "daily",
       aiWeeklySummary: true,
       exportReport: false,
+      competitorTracking: true,
+      faqGeneration: true,
+      revenueOpportunity: true,
+      contentGapDetection: true,
+      faqPublishing: true,
+      weeklyReports: true,
+      bulkPublishing: false,
+      teamFeatures: false,
+      executiveReports: false,
+      pdfExport: false,
+      priorityProcessing: false,
     },
   },
   pro: {
@@ -78,13 +122,24 @@ export const PLANS: Record<PlanId, PlanDefinition> = {
     name: "Pro",
     price: 79,
     trialDays: 7,
-    tagline: "High volume, AI summaries, and report export.",
+    tagline: "Executive reports, bulk publishing, and advanced AI summaries.",
     features: {
       messagesPerMonth: 50000,
       analysesPerWeek: 7,
       analysisFrequency: "daily",
       aiWeeklySummary: true,
       exportReport: true,
+      competitorTracking: true,
+      faqGeneration: true,
+      revenueOpportunity: true,
+      contentGapDetection: true,
+      faqPublishing: true,
+      weeklyReports: true,
+      bulkPublishing: true,
+      teamFeatures: true,
+      executiveReports: true,
+      pdfExport: true,
+      priorityProcessing: true,
     },
   },
 };

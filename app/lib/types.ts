@@ -66,6 +66,7 @@ export interface AnalysisInput {
   messages: NormalizedMessage[];
   products: ProductInput[];
   pages?: PageInput[];
+  competitorTerms?: string[];
   /** Inject "now" for deterministic tests. Defaults to new Date(). */
   now?: Date;
   /** Primary analysis window in days. Defaults to 30. */
@@ -128,6 +129,99 @@ export interface CompetitorMentionResult {
   exampleQuote?: string;
 }
 
+export interface QuestionOpportunity {
+  groupId: KeywordGroupId;
+  label: string;
+  count: number;
+  trend7: number;
+  severity: LeakageSeverity;
+  revenueImpact: number;
+  lowEstimate: number;
+  highEstimate: number;
+  priorityScore: number;
+  actionType: "faq" | "content_block" | "publish" | "policy" | "comparison";
+  suggestedAction: string;
+  exampleQuote?: string;
+}
+
+export interface QuickWin {
+  title: string;
+  action: string;
+  impact: LeakageSeverity;
+  priorityScore?: number;
+  lowEstimate?: number;
+  highEstimate?: number;
+  ctaLabel?: string;
+  groupId?: KeywordGroupId;
+}
+
+export interface RecommendedAction {
+  id: string;
+  title: string;
+  priority: LeakageSeverity;
+  priorityScore: number;
+  mentions: number;
+  lowEstimate: number;
+  highEstimate: number;
+  recommendedAction: string;
+  ctaLabel: string;
+  targetUrl: string;
+  groupId?: KeywordGroupId;
+}
+
+export interface ContentGapAnalysis {
+  productId: string | null;
+  productTitle: string;
+  contentGapScore: number;
+  missingSections: string[];
+  coveredSections: string[];
+  customerQuestions: string[];
+  estimatedLow: number;
+  estimatedHigh: number;
+  recommendedActions: string[];
+}
+
+export interface CompetitorThreat {
+  name: string;
+  mentionCount: number;
+  threatScore: number;
+  reasons: string[];
+  recommendation: string;
+  exampleQuote?: string;
+}
+
+export interface RevenueOpportunity {
+  amount: number;
+  currency: "USD";
+  monthlyAtRisk: number;
+  estimatedLow: number;
+  estimatedHigh: number;
+  headline: string;
+  summary: string;
+  topFriction: {
+    label: string;
+    trend7: number;
+    count: number;
+  } | null;
+  quickWins: QuickWin[];
+  drivers: Array<{
+    groupId: KeywordGroupId;
+    label: string;
+    count: number;
+    revenueImpact: number;
+    lowEstimate: number;
+    highEstimate: number;
+    priorityScore: number;
+  }>;
+  opportunities: Array<{
+    label: string;
+    revenueImpact: number;
+    lowEstimate: number;
+    highEstimate: number;
+  }>;
+  alerts: RevenueLeakageAlert[];
+}
+
 export type LeakageSeverity = "low" | "medium" | "high";
 
 /** A revenue-leakage alert: a friction group rising sharply. */
@@ -170,6 +264,11 @@ export interface InsightResult {
   faqOpportunities: FaqOpportunityResult[];
   competitors: CompetitorMentionResult[];
   revenueLeakage: RevenueLeakageAlert[];
+  revenueOpportunity: RevenueOpportunity;
+  questionOpportunities: QuestionOpportunity[];
+  recommendedActions: RecommendedAction[];
+  contentGaps: ContentGapAnalysis[];
+  competitorThreats: CompetitorThreat[];
   /** Daily volume for the trend chart (oldest -> newest). */
   weeklyTrend: TrendPoint[];
 }
@@ -186,5 +285,64 @@ export const EMPTY_INSIGHT: InsightResult = {
   faqOpportunities: [],
   competitors: [],
   revenueLeakage: [],
+  revenueOpportunity: {
+    amount: 0,
+    currency: "USD",
+    monthlyAtRisk: 0,
+    estimatedLow: 0,
+    estimatedHigh: 0,
+    headline: "Add customer questions to reveal recovery actions",
+    summary: "Add customer questions or sync Shopify data to discover opportunities.",
+    topFriction: null,
+    quickWins: [],
+    drivers: [],
+    opportunities: [],
+    alerts: [],
+  },
+  questionOpportunities: [],
+  recommendedActions: [],
+  contentGaps: [],
+  competitorThreats: [],
   weeklyTrend: [],
 };
+
+function normalizeRevenueOpportunity(
+  value: Partial<RevenueOpportunity> | null | undefined,
+): RevenueOpportunity {
+  const amount = value?.amount ?? value?.monthlyAtRisk ?? 0;
+  const estimatedLow = value?.estimatedLow ?? amount;
+  const estimatedHigh = value?.estimatedHigh ?? amount;
+  return {
+    amount,
+    currency: value?.currency ?? "USD",
+    monthlyAtRisk: value?.monthlyAtRisk ?? amount,
+    estimatedLow,
+    estimatedHigh,
+    headline: value?.headline ?? EMPTY_INSIGHT.revenueOpportunity.headline,
+    summary: value?.summary ?? EMPTY_INSIGHT.revenueOpportunity.summary,
+    topFriction: value?.topFriction ?? null,
+    quickWins: value?.quickWins ?? [],
+    drivers: value?.drivers ?? [],
+    opportunities: value?.opportunities ?? [],
+    alerts: value?.alerts ?? [],
+  };
+}
+
+export function normalizeInsightResult(value: Partial<InsightResult> | null | undefined): InsightResult {
+  return {
+    ...EMPTY_INSIGHT,
+    ...value,
+    topQuestions: value?.topQuestions ?? [],
+    keywordGroups: value?.keywordGroups ?? [],
+    productConfusion: value?.productConfusion ?? [],
+    faqOpportunities: value?.faqOpportunities ?? [],
+    competitors: value?.competitors ?? [],
+    revenueLeakage: value?.revenueLeakage ?? [],
+    revenueOpportunity: normalizeRevenueOpportunity(value?.revenueOpportunity),
+    questionOpportunities: value?.questionOpportunities ?? [],
+    recommendedActions: value?.recommendedActions ?? [],
+    contentGaps: value?.contentGaps ?? [],
+    competitorThreats: value?.competitorThreats ?? [],
+    weeklyTrend: value?.weeklyTrend ?? [],
+  };
+}

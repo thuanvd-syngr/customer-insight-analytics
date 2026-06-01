@@ -5,12 +5,11 @@ import {
   BlockStack,
   Button,
   Card,
-  Layout,
-  Page,
   Select,
   Text,
   TextField,
 } from "@shopify/polaris";
+import { useState } from "react";
 
 import prisma from "~/db.server";
 import {
@@ -26,18 +25,19 @@ import {
 } from "~/lib/billing";
 import { parseImport } from "~/lib/import";
 import { runAnalysis } from "~/lib/engine";
+import { syncShopifyData } from "~/lib/shopify-data.server";
 import {
   buildSampleAnalysisInput,
   filterNewSampleMessages,
   getSampleMessages,
-  SAMPLE_PRODUCTS,
   SAMPLE_PAGES,
 } from "~/lib/sample-data";
 import { ensureShop, markOnboarded, saveInsightRun } from "~/lib/shop.server";
 import { authenticate } from "~/shopify.server";
+import { AppPage, KpiCard, SectionHeader } from "~/components";
 
 async function shopContext(request: Request) {
-  const { session } = await authenticate.admin(request);
+  const { session, admin } = await authenticate.admin(request);
   const shop = await ensureShop(prisma, session.shop);
   const isProduction = process.env.NODE_ENV === "production";
   const plan = resolvePlan({
@@ -46,7 +46,7 @@ async function shopContext(request: Request) {
     devOverrideEnabled: process.env.ENABLE_DEV_PLAN_OVERRIDE === "true",
     isProduction,
   });
-  return { shop, plan };
+  return { shop, plan, admin };
 }
 
 export async function loader({ request }: LoaderFunctionArgs) {
@@ -57,7 +57,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
 }
 
 export async function action({ request }: ActionFunctionArgs) {
-  const { shop, plan } = await shopContext(request);
+  const { shop, plan, admin } = await shopContext(request);
   const now = new Date();
   const form = await request.formData();
   const intent = String(form.get("intent") ?? "");
@@ -114,10 +114,32 @@ export async function action({ request }: ActionFunctionArgs) {
     return redirect("/app/import");
   }
 
+  if (intent === "sync") {
+    await syncShopifyData(prisma, shop.id, admin);
+    return redirect("/app/import");
+  }
+
   if (intent === "analyze") {
     const gate = canRunAnalysis(usage);
     if (!gate.allowed) return json({ error: gate.reason }, { status: 403 });
     const stored = await prisma.importedMessage.findMany({ where: { shopId: shop.id } });
+    const [storedProducts, settings] = await Promise.all([
+      prisma.shopifyProduct.findMany({ where: { shopId: shop.id }, orderBy: { updatedAt: "desc" }, take: 100 }),
+      prisma.appSetting.findMany({ where: { shopId: shop.id } }),
+    ]);
+    const settingValues = Object.fromEntries(settings.map((setting) => [setting.key, setting.value]));
+    const competitorTerms = String(settingValues.competitorTerms ?? "")
+      .split(/[\n,]/)
+      .map((term) => term.trim())
+      .filter(Boolean);
+    const products = storedProducts.length
+      ? storedProducts.map((product) => ({
+          id: product.externalId,
+          title: product.title,
+          handle: product.handle ?? undefined,
+          description: product.description ?? "",
+        }))
+      : [];
     const input =
       stored.length === 0
         ? buildSampleAnalysisInput(now)
@@ -130,8 +152,9 @@ export async function action({ request }: ActionFunctionArgs) {
               customerRef: message.customerRef,
               externalId: message.externalId,
             })),
-            products: SAMPLE_PRODUCTS,
+            products,
             pages: SAMPLE_PAGES,
+            competitorTerms,
             now,
             windowDays: 30,
           };
@@ -147,45 +170,120 @@ export async function action({ request }: ActionFunctionArgs) {
 export default function ImportPage() {
   const { usage, recentMessageCount } = useLoaderData<typeof loader>();
   const navigation = useNavigation();
+  const [source, setSource] = useState("manual");
   const busy = navigation.state !== "idle";
   return (
-    <Page title="Import">
-      <Layout>
-        <Layout.Section>
-          <BlockStack gap="400">
-            <Card>
+    <AppPage
+      title="Data hub"
+      subtitle="Connect Shopify data, import conversations, and run revenue analysis."
+      primaryAction={
+        <Form method="post">
+          <input type="hidden" name="intent" value="analyze" />
+          <Button variant="primary" submit loading={busy}>Run analysis</Button>
+        </Form>
+      }
+    >
+      <BlockStack gap="500">
+        <div className="cia-section-band">
+          <BlockStack gap="300">
+            <SectionHeader
+              title="Revenue recovery onboarding"
+              description="Follow the workflow from raw customer questions to prepared conversion fixes."
+            />
+            {[
+              ["1", "Import conversations", recentMessageCount > 0],
+              ["2", "Analyze", false],
+              ["3", "Generate actions", false],
+              ["4", "Prepare fixes", false],
+            ].map(([step, label, done]) => (
+              <div className="cia-queue-row" key={String(step)}>
+                <div className="cia-rank">{String(step)}</div>
+                <BlockStack gap="050">
+                  <Text as="h3" variant="headingSm">
+                    {String(label)}
+                  </Text>
+                  <Text as="p" variant="bodySm" tone="subdued">
+                    {done ? "Completed" : "Next step in the recovery workflow"}
+                  </Text>
+                </BlockStack>
+                <Button url={step === "1" ? "/app/import" : step === "2" ? "/app/import" : "/app/faq"}>
+                  {done ? "Review" : "Start"}
+                </Button>
+              </div>
+            ))}
+          </BlockStack>
+        </div>
+
+        <div className="cia-three-grid">
+          <KpiCard
+            label="Messages this month"
+            value={usage.messagesThisMonth.toLocaleString("en-US")}
+            detail={`${recentMessageCount} stored conversations`}
+            tone="info"
+          />
+          <KpiCard
+            label="Next step"
+            value={recentMessageCount > 0 ? "Run analysis" : "Ready to analyze customer questions"}
+            detail="Find revenue opportunities after data is loaded"
+            tone="success"
+          />
+          <KpiCard
+            label="Data status"
+            value={recentMessageCount > 0 ? "Ready" : "Store health needs order history"}
+            detail="Sync Shopify data or load sample messages"
+            tone={recentMessageCount > 0 ? "success" : "warning"}
+          />
+        </div>
+
+        <div className="cia-two-grid">
+          <Card>
+            <Form method="post">
               <BlockStack gap="300">
-                <Text as="h2" variant="headingMd">Usage</Text>
-                <Text as="p" variant="bodyMd">
-                  {usage.messagesThisMonth} messages this month. {recentMessageCount} stored messages.
-                </Text>
+                <SectionHeader title="Connect Shopify data" description="Sync products, orders, and customers for product-level recovery insights." />
+                <input type="hidden" name="intent" value="sync" />
+                <Button submit loading={busy} variant="primary">Sync Shopify data</Button>
               </BlockStack>
-            </Card>
-            <Card>
-              <Form method="post">
+            </Form>
+          </Card>
+          <Card>
+            <Form method="post">
+              <BlockStack gap="300">
+                <SectionHeader title="Load sample data" description="Explore the revenue recovery workflow with realistic sample conversations." />
                 <input type="hidden" name="intent" value="sample" />
                 <Button submit loading={busy}>Load sample data</Button>
-              </Form>
-            </Card>
-            <Card>
-              <Form method="post">
-                <BlockStack gap="300">
-                  <input type="hidden" name="intent" value="import" />
-                  <Select label="Source" name="source" options={["manual", "csv", "chat", "email"]} />
-                  <TextField label="Messages or CSV" name="raw" multiline={8} autoComplete="off" />
-                  <Button submit loading={busy}>Import messages</Button>
-                </BlockStack>
-              </Form>
-            </Card>
-            <Card>
-              <Form method="post">
-                <input type="hidden" name="intent" value="analyze" />
-                <Button variant="primary" submit loading={busy}>Run analysis</Button>
-              </Form>
-            </Card>
-          </BlockStack>
-        </Layout.Section>
-      </Layout>
-    </Page>
+              </BlockStack>
+            </Form>
+          </Card>
+        </div>
+
+        <Card>
+          <Form method="post">
+            <BlockStack gap="300">
+              <SectionHeader title="Add customer questions" description="Paste support messages, chats, emails, or CSV rows." />
+              <input type="hidden" name="intent" value="import" />
+              <Select
+                label="Source"
+                name="source"
+                options={["manual", "csv", "chat", "email"]}
+                value={source}
+                onChange={setSource}
+              />
+              <TextField label="Messages or CSV" name="raw" multiline={8} autoComplete="off" />
+              <Button submit loading={busy}>Add customer questions</Button>
+            </BlockStack>
+          </Form>
+        </Card>
+
+        <Card>
+          <Form method="post">
+            <BlockStack gap="300">
+              <SectionHeader title="Run analysis" description="Run analysis to find revenue opportunities." />
+              <input type="hidden" name="intent" value="analyze" />
+              <Button variant="primary" submit loading={busy}>Run analysis</Button>
+            </BlockStack>
+          </Form>
+        </Card>
+      </BlockStack>
+    </AppPage>
   );
 }

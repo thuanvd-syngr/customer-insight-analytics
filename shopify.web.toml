@@ -1,0 +1,15 @@
+name = "remix"
+roles = ["frontend", "backend"]
+
+auth_callback_path = [
+  "/auth/callback",
+  "/auth/shopify/callback",
+  "/api/auth/callback"
+]
+
+webhooks_path = "/webhooks"
+
+[commands]
+predev = "npx prisma generate"
+dev = "npm exec remix vite:dev"
+build = "npm exec remix vite:build"

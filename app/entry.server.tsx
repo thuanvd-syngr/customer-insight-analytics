@@ -8,6 +8,31 @@ import { renderToPipeableStream } from "react-dom/server";
 
 import { addDocumentResponseHeaders } from "./shopify.server";
 
+function ensureEmbeddedFrameHeaders(request: Request, responseHeaders: Headers) {
+  addDocumentResponseHeaders(request, responseHeaders);
+  responseHeaders.delete("X-Frame-Options");
+
+  const csp = responseHeaders.get("Content-Security-Policy");
+  if (!csp) {
+    responseHeaders.set(
+      "Content-Security-Policy",
+      "frame-ancestors https://admin.shopify.com https://*.myshopify.com;",
+    );
+    return;
+  }
+
+  if (csp.includes("frame-ancestors") && !csp.includes("https://*.myshopify.com")) {
+    responseHeaders.set(
+      "Content-Security-Policy",
+      csp.replace(
+        /frame-ancestors([^;]*);?/,
+        (_match, ancestors: string) =>
+          `frame-ancestors${ancestors} https://*.myshopify.com;`,
+      ),
+    );
+  }
+}
+
 export default function handleRequest(
   request: Request,
   responseStatusCode: number,
@@ -15,7 +40,7 @@ export default function handleRequest(
   remixContext: EntryContext,
   _loadContext: AppLoadContext,
 ) {
-  addDocumentResponseHeaders(request, responseHeaders);
+  ensureEmbeddedFrameHeaders(request, responseHeaders);
   return new Promise((resolve, reject) => {
     let shellRendered = false;
     const userAgent = request.headers.get("user-agent");

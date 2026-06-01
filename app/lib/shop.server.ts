@@ -1,6 +1,6 @@
 import type { InsightRun, PrismaClient, Shop } from "@prisma/client";
 
-import type { InsightResult } from "~/lib/types";
+import { normalizeInsightResult, type InsightResult } from "~/lib/types";
 import type { PlanId } from "~/lib/billing/plans";
 
 // Central data-access for the Shop aggregate and its insight runs.
@@ -69,7 +69,7 @@ export async function getRecentRuns(
 export function parseRun(run: InsightRun | null): InsightResult | null {
   if (!run?.summaryJson) return null;
   try {
-    return JSON.parse(run.summaryJson) as InsightResult;
+    return normalizeInsightResult(JSON.parse(run.summaryJson) as Partial<InsightResult>);
   } catch {
     return null;
   }
