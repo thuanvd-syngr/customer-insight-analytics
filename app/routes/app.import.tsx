@@ -40,6 +40,7 @@ import { AppPage, KpiCard, SectionHeader } from "~/components";
 import { getDelegate, safeCount } from "~/lib/prisma-safe";
 import { orderSyncStatusText, productSyncStatusText } from "~/lib/sync-status";
 import { getShopifyProductSchemaDiagnostics } from "~/lib/schema-diagnostics.server";
+import { ANALYSIS_MESSAGE_LIMIT, parseStringArray } from "~/lib/utils";
 
 const CUSTOMER_APPROVAL_COPY = "Protected customer data approval required for customer profiles.";
 
@@ -49,16 +50,6 @@ const EMPTY_SYNC: ShopifySyncResult = {
   customers: { ok: false, count: 0, skipped: true, reason: "Protected customer data not approved" },
   messages: 0,
 };
-
-function parseStringArray(value?: string | null): string[] {
-  if (!value) return [];
-  try {
-    const parsed = JSON.parse(value) as unknown;
-    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
-  } catch {
-    return [];
-  }
-}
 
 async function shopContext(request: Request) {
   const { session, admin } = await authenticate.admin(request);
@@ -86,12 +77,12 @@ export async function loader({ request }: LoaderFunctionArgs) {
       safeCount(prisma, "shopifyOrder", { where: { shopId: shop.id } }),
       getLatestRun(prisma, shop.id),
     ]);
-    const latestInsight = parseRun(latestRun);
-    const analyzedProductCount = latestInsight?.contentGaps?.length ?? 0;
+    const analyzedProductCount = latestRun?.productCount ?? 0;
     const analyzedMessageCount = latestRun?.messageCount ?? 0;
-    const isDataStale =
-      (productCount > 0 && productCount > analyzedProductCount) ||
-      (latestRun != null && recentMessageCount !== analyzedMessageCount);
+    const isDataStale = latestRun != null && (
+      recentMessageCount !== analyzedMessageCount ||
+      productCount !== analyzedProductCount
+    );
     const isDevMode = process.env.NODE_ENV !== "production";
     const analysisGate = canRunAnalysis(usage);
 
@@ -201,7 +192,11 @@ export async function action({ request }: ActionFunctionArgs) {
 
   if (intent === "import") {
     const raw = String(form.get("raw") ?? "");
-    const source = String(form.get("source") ?? "manual");
+    const rawSource = String(form.get("source") ?? "manual");
+    const VALID_IMPORT_SOURCES = ["manual", "csv", "chat", "email"] as const;
+    const source = VALID_IMPORT_SOURCES.includes(rawSource as (typeof VALID_IMPORT_SOURCES)[number])
+      ? rawSource
+      : "manual";
     const parsed = parseImport(raw, { source, now });
     const gate = canImportMessages(usage, parsed.length);
     if (!gate.allowed) return json({ error: gate.reason }, { status: 403 });
@@ -231,24 +226,27 @@ export async function action({ request }: ActionFunctionArgs) {
     const isDevMode = process.env.NODE_ENV !== "production";
     // Stale detection: products or messages changed since the last analysis snapshot.
     // When stale, bypass the weekly limit — new data requires fresh analysis.
-    const [currentProductCount, currentMessageCount, latestRunForStale] = await Promise.all([
-      safeCount(prisma, "shopifyProduct", { where: { shopId: shop.id } }),
+    const [currentMessageCount, currentProductCountForStale, latestRunForStale] = await Promise.all([
       safeCount(prisma, "importedMessage", { where: { shopId: shop.id } }),
+      safeCount(prisma, "shopifyProduct", { where: { shopId: shop.id } }),
       getLatestRun(prisma, shop.id),
     ]);
-    const latestInsightForStale = parseRun(latestRunForStale);
-    const analyzedProductCount = latestInsightForStale?.contentGaps?.length ?? 0;
-    const isDataStale =
-      (currentProductCount > 0 && currentProductCount > analyzedProductCount) ||
-      (latestRunForStale != null && currentMessageCount !== (latestRunForStale.messageCount ?? 0));
+    const isDataStale = latestRunForStale != null && (
+      currentMessageCount !== (latestRunForStale.messageCount ?? 0) ||
+      currentProductCountForStale !== (latestRunForStale.productCount ?? 0)
+    );
     const gate = canRunAnalysis(usage, { bypass: isDevMode || isDataStale });
     if (!gate.allowed) return json({ error: gate.reason }, { status: 403 });
     const importedMessage = getDelegate(prisma, "importedMessage");
     const stored = importedMessage?.findMany
-      ? await importedMessage.findMany({ where: { shopId: shop.id } })
+      ? await importedMessage.findMany({
+          where: { shopId: shop.id },
+          take: ANALYSIS_MESSAGE_LIMIT,
+          orderBy: { occurredAt: "desc" },
+        })
       : [];
     const [storedProducts, settings] = await Promise.all([
-      prisma.shopifyProduct.findMany({ where: { shopId: shop.id }, orderBy: { updatedAt: "desc" }, take: 100 }),
+      prisma.shopifyProduct.findMany({ where: { shopId: shop.id }, orderBy: { updatedAt: "desc" }, take: 1000 }),
       prisma.appSetting.findMany({ where: { shopId: shop.id } }),
     ]);
     const settingValues = Object.fromEntries(settings.map((setting) => [setting.key, setting.value]));
@@ -282,7 +280,9 @@ export async function action({ request }: ActionFunctionArgs) {
       now,
       windowDays: 30,
     };
-    await saveInsightRun(prisma, shop.id, runAnalysis(input));
+    // Use the real DB total (currentProductCountForStale) so the staleness check
+    // never disagrees with itself regardless of how many products were sampled.
+    await saveInsightRun(prisma, shop.id, runAnalysis(input), 30, currentProductCountForStale);
     await incrementUsage(prisma, shop.id, "analyses", isoWeekPeriod(now), 1);
     await markOnboarded(prisma, shop.id);
     return redirect("/app");

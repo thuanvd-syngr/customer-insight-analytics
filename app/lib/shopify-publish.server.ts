@@ -10,7 +10,11 @@ async function graph<T>(
   variables: Record<string, unknown>,
 ): Promise<T> {
   const response = await admin.graphql(query, { variables });
-  return (await response.json()) as T;
+  const body = (await response.json()) as T & { errors?: Array<{ message: string }> };
+  if (body.errors?.length) {
+    throw new Error(body.errors.map((e) => e.message).join("; "));
+  }
+  return body;
 }
 
 async function productDescription(admin: AdminLike, productId: string): Promise<string> {
@@ -112,6 +116,11 @@ export async function publishGeneratedFaq(input: {
     where: { id: input.faqId, shopId: input.shopId },
   });
   if (!faq) throw new Error("FAQ draft not found.");
+  // Idempotency guard: if already published, return current state without re-publishing.
+  // Prevents duplicate content if the user clicks Publish twice (especially append_description).
+  if (faq.status === "published") {
+    return faq;
+  }
   if (!faq.productId) {
     return input.db.generatedFaq.update({
       where: { id: faq.id },
@@ -177,6 +186,12 @@ export async function rollbackGeneratedFaq(input: {
     where: { id: input.faqId, shopId: input.shopId },
   });
   if (!faq) throw new Error("FAQ draft not found.");
+  if (faq.status !== "published") {
+    return input.db.generatedFaq.update({
+      where: { id: faq.id },
+      data: { status: "failed", error: "Rollback is only available for a currently published FAQ." },
+    });
+  }
   if ((faq.publishTarget === "metafield" || faq.publishTarget === "faq_block") && faq.publishRef) {
     const body = await deleteMetafield(input.admin, faq.publishRef);
     const errors = bodyErrors(body);

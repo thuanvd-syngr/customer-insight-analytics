@@ -1,7 +1,7 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { json, redirect } from "@remix-run/node";
-import { Form, useLoaderData, useNavigation } from "@remix-run/react";
-import { Badge, BlockStack, Box, Button, Card, Divider, InlineGrid, InlineStack, Text, TextField } from "@shopify/polaris";
+import { Form, useActionData, useLoaderData, useNavigation } from "@remix-run/react";
+import { Badge, Banner, BlockStack, Box, Button, Card, Divider, InlineGrid, InlineStack, Text, TextField } from "@shopify/polaris";
 
 import {
   AppPage,
@@ -178,7 +178,13 @@ export async function action({ request }: ActionFunctionArgs) {
 
     if (intent === "publish") {
       const id = String(form.get("id") ?? "");
-      const target = String(form.get("publishTarget") ?? "metafield") as "metafield" | "append_description" | "faq_block";
+      const rawTarget = String(form.get("publishTarget") ?? "metafield");
+      const VALID_TARGETS = ["metafield", "append_description", "faq_block"] as const;
+      type PublishTarget = typeof VALID_TARGETS[number];
+      if (!VALID_TARGETS.includes(rawTarget as PublishTarget)) {
+        return json({ error: "Invalid publish target." }, { status: 400 });
+      }
+      const target = rawTarget as PublishTarget;
       await publishGeneratedFaq({ db: prisma, admin, shopId: shop.id, faqId: id, target });
       return redirect("/app/faq");
     }
@@ -269,8 +275,12 @@ export async function action({ request }: ActionFunctionArgs) {
     }
     return redirect("/app/faq");
   } catch (error) {
+    if (error instanceof Response) throw error;
     console.error("FAQ route action failed", error);
-    return redirect("/app/faq");
+    return json(
+      { error: error instanceof Error ? error.message : "An unexpected error occurred. Please try again." },
+      { status: 500 },
+    );
   }
 }
 
@@ -310,11 +320,13 @@ export default function FaqGenerator() {
     aiConfigured,
     storageReady,
   } = useLoaderData<typeof loader>();
+  const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
   if (navigation.state === "loading") return <ListSkeleton />;
 
   const source = opportunities.length ? opportunities : questionOpportunities;
   const items = source.slice(0, 8);
+  const actionError = actionData && "error" in actionData ? actionData.error : null;
 
   return (
     <AppPage
@@ -335,6 +347,11 @@ export default function FaqGenerator() {
       secondaryAction={<Button url="/app/import">Run analysis</Button>}
     >
       <BlockStack gap="500">
+        {actionError ? (
+          <Banner tone="critical" title="Action failed">
+            <p>{actionError}</p>
+          </Banner>
+        ) : null}
         <Card>
           <InlineStack align="space-between" blockAlign="center" wrap={false}>
             <BlockStack gap="050">
@@ -590,11 +607,11 @@ export default function FaqGenerator() {
                           </Form>
                         </>
                       ) : null}
-                      {faq.status === "published" && faq.publishTarget === "append_description" ? (
+                      {faq.status === "published" ? (
                         <Form method="post">
                           <input type="hidden" name="intent" value="rollback" />
                           <input type="hidden" name="id" value={faq.id} />
-                          <Button submit size="slim">Rollback</Button>
+                          <Button submit size="slim">Undo publish</Button>
                         </Form>
                       ) : null}
                       </InlineStack>

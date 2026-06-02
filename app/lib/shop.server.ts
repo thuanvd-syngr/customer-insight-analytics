@@ -84,12 +84,14 @@ export async function saveInsightRun(
   shopId: string,
   result: InsightResult,
   windowDays: number = result.windowDays,
+  productCount: number = 0,
 ): Promise<InsightRun> {
   const run = await db.insightRun.create({
     data: {
       shopId,
       status: "completed",
       messageCount: result.messageCount,
+      productCount,
       insightScore: result.insightScore,
       windowDays,
       summaryJson: JSON.stringify(result),

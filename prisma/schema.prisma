@@ -73,6 +73,7 @@ model ImportedMessage {
   occurredAt  DateTime // event time, used for trend windows
   createdAt   DateTime @default(now())
 
+  @@unique([shopId, externalId])
   @@index([shopId, occurredAt])
   @@index([shopId, source])
 }
@@ -82,9 +83,10 @@ model InsightRun {
   id           String    @id @default(cuid())
   shopId       String
   shop         Shop      @relation(fields: [shopId], references: [id], onDelete: Cascade)
-  status       String    @default("completed") // running | completed | failed
-  messageCount Int       @default(0)
-  insightScore Int       @default(0)
+  status        String    @default("completed") // running | completed | failed
+  messageCount  Int       @default(0)
+  productCount  Int       @default(0)
+  insightScore  Int       @default(0)
   windowDays   Int       @default(30)
   summaryJson  String? // full InsightResult JSON snapshot
   error        String?

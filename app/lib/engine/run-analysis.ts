@@ -14,17 +14,21 @@ export function runAnalysis(input: AnalysisInput): InsightResult {
   const now = input.now ?? new Date();
   const windowDays = input.windowDays ?? 30;
   const start = now.getTime() - windowDays * 86_400_000;
-  const messages = input.messages.filter(
-    (message) => message.occurredAt.getTime() > start && message.occurredAt <= now,
+  const customerMessages = input.messages.filter(
+    (message) =>
+      message.occurredAt.getTime() > start &&
+      message.occurredAt <= now &&
+      message.source !== "product_text" &&
+      message.source !== "product_tags",
   );
-  const keywordGroups = buildKeywordGroupResults(input.messages, now, windowDays);
-  const productConfusion = detectProductConfusion(messages, input.products);
+  const keywordGroups = buildKeywordGroupResults(customerMessages, now, windowDays);
+  const productConfusion = detectProductConfusion(customerMessages, input.products);
   const faqOpportunities = detectFaqOpportunities(
     keywordGroups,
     input.products,
     input.pages ?? [],
   );
-  const competitors = detectCompetitors(messages, input.competitorTerms);
+  const competitors = detectCompetitors(customerMessages, input.competitorTerms);
   const revenueLeakage = detectRevenueLeakage(keywordGroups);
   const revenueOpportunity = buildRevenueOpportunity(keywordGroups);
   const questionOpportunities = buildQuestionOpportunities(keywordGroups);
@@ -42,7 +46,7 @@ export function runAnalysis(input: AnalysisInput): InsightResult {
     ).length,
   );
   const insightScore = computeInsightScore({
-    messageCount: messages.length,
+    messageCount: customerMessages.length,
     keywordGroups,
     leakage: revenueLeakage,
     faq: faqOpportunities,
@@ -51,7 +55,7 @@ export function runAnalysis(input: AnalysisInput): InsightResult {
   return {
     insightScore,
     windowDays,
-    messageCount: messages.length,
+    messageCount: customerMessages.length,
     generatedAt: now.toISOString(),
     topQuestions: keywordGroups.slice(0, 5).map((group) => ({
       text: group.label ? group.label : group.groupId,
@@ -68,6 +72,6 @@ export function runAnalysis(input: AnalysisInput): InsightResult {
     recommendedActions,
     contentGaps,
     competitorThreats,
-    weeklyTrend: dailyVolume(input.messages, now, 7),
+    weeklyTrend: dailyVolume(customerMessages, now, 7),
   };
 }

@@ -1,6 +1,7 @@
-import type { LoaderFunctionArgs } from "@remix-run/node";
+import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { json } from "@remix-run/node";
-import { Form, useLoaderData, useNavigation } from "@remix-run/react";
+import { Form, useFetcher, useLoaderData, useNavigation, useRevalidator } from "@remix-run/react";
+import { useEffect } from "react";
 import {
   Badge,
   Banner,
@@ -17,9 +18,9 @@ import { runAnalysis } from "~/lib/engine";
 import { EMPTY_INSIGHT, normalizeInsightResult } from "~/lib/types";
 import { ensureShop, getLatestRun, markOnboarded, parseRun, saveInsightRun } from "~/lib/shop.server";
 import { syncShopifyData } from "~/lib/shopify-data.server";
-import type { ShopifySyncResult } from "~/lib/shopify-data.server";
 import { isSampleDataEnabled } from "~/lib/sample-data";
 import { authenticate } from "~/shopify.server";
+import { ANALYSIS_MESSAGE_LIMIT, parseStringArray } from "~/lib/utils";
 import {
   AppPage,
   DashboardSkeleton,
@@ -33,97 +34,102 @@ import {
   moneyRange,
 } from "~/components";
 
-function parseStringArray(value?: string | null): string[] {
-  if (!value) return [];
-  try {
-    const parsed = JSON.parse(value) as unknown;
-    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
-  } catch {
-    return [];
-  }
-}
-
-const EMPTY_SYNC: ShopifySyncResult = {
-  products: { ok: false, count: 0, skipped: true },
-  orders: { ok: false, count: 0, skipped: true },
-  customers: { ok: false, count: 0, skipped: true, reason: "Protected customer data not approved" },
-  messages: 0,
-};
-
-export async function loader({ request }: LoaderFunctionArgs) {
+export async function action({ request }: ActionFunctionArgs) {
   try {
     const { session, admin } = await authenticate.admin(request);
+    const form = await request.formData();
+    if (String(form.get("intent")) !== "auto-sync") {
+      return json({ ok: false as const, error: "Unknown intent" });
+    }
     const shop = await ensureShop(prisma, session.shop);
-    let latestRun = await getLatestRun(prisma, shop.id);
-    const existingLocalData = await prisma.importedMessage.count({ where: { shopId: shop.id } });
-    let autoSync = { attempted: false, ...EMPTY_SYNC };
-  if (!latestRun && existingLocalData === 0) {
-    autoSync = { attempted: true, ...(await syncShopifyData(prisma, shop.id, admin)) };
-    const [stored, storedProducts, settings] = await Promise.all([
-      prisma.importedMessage.findMany({ where: { shopId: shop.id } }),
+    const autoSync = await syncShopifyData(prisma, shop.id, admin);
+    const [stored, storedProducts, settings, totalProductCount] = await Promise.all([
+      prisma.importedMessage.findMany({
+        where: { shopId: shop.id },
+        take: ANALYSIS_MESSAGE_LIMIT,
+        orderBy: { occurredAt: "desc" },
+      }),
       prisma.shopifyProduct.findMany({ where: { shopId: shop.id }, orderBy: { updatedAt: "desc" }, take: 1000 }),
       prisma.appSetting.findMany({ where: { shopId: shop.id } }),
+      prisma.shopifyProduct.count({ where: { shopId: shop.id } }),
     ]);
     if (stored.length > 0 || storedProducts.length > 0) {
-      const settingValues = Object.fromEntries(settings.map((setting) => [setting.key, setting.value]));
+      const settingValues = Object.fromEntries(settings.map((s) => [s.key, s.value]));
       const competitorTerms = String(settingValues.competitorTerms ?? "")
         .split(/[\n,]/)
-        .map((term) => term.trim())
+        .map((t) => t.trim())
         .filter(Boolean);
-      latestRun = await saveInsightRun(prisma, shop.id, runAnalysis({
-        messages: stored.map((message) => ({
-          id: message.id,
-          content: message.content,
-          occurredAt: message.occurredAt,
-          source: message.source,
-          customerRef: message.customerRef,
-          externalId: message.externalId,
+      await saveInsightRun(prisma, shop.id, runAnalysis({
+        messages: stored.map((m) => ({
+          id: m.id,
+          content: m.content,
+          occurredAt: m.occurredAt,
+          source: m.source,
+          customerRef: m.customerRef,
+          externalId: m.externalId,
         })),
-        products: storedProducts.map((product) => ({
-          id: product.externalId,
-          title: product.title,
-          handle: product.handle ?? undefined,
-          description: product.description ?? "",
-          tags: parseStringArray(product.tags),
-          productType: product.productType,
-          collections: parseStringArray(product.collections),
+        products: storedProducts.map((p) => ({
+          id: p.externalId,
+          title: p.title,
+          handle: p.handle ?? undefined,
+          description: p.description ?? "",
+          tags: parseStringArray(p.tags),
+          productType: p.productType,
+          collections: parseStringArray(p.collections),
         })),
         competitorTerms,
         now: new Date(),
         windowDays: 30,
-      }));
+      }), 30, totalProductCount);
       await markOnboarded(prisma, shop.id);
     }
-  }
-  const insight = normalizeInsightResult(parseRun(latestRun) ?? EMPTY_INSIGHT);
-  const [importedMessages, orderCount, productCount] = await Promise.all([
-    prisma.importedMessage.count({ where: { shopId: shop.id } }),
-    prisma.shopifyOrder.count({ where: { shopId: shop.id } }),
-    prisma.shopifyProduct.count({ where: { shopId: shop.id } }),
-  ]);
-  const isProduction = process.env.NODE_ENV === "production";
-  const plan = resolvePlan({
-    activePlanId: shop.plan as PlanId,
-    devOverride: getDevPlanOverride(),
-    devOverrideEnabled: process.env.ENABLE_DEV_PLAN_OVERRIDE === "true",
-    isProduction,
-  });
-  const usage = await getUsageSnapshot(prisma, shop.id, plan, new Date());
-  return json({
-    ...buildDashboardViewModel({ insight, importedMessages, hasRun: Boolean(latestRun) }),
-    orderCount,
-    productCount,
-    autoSync,
-    loadError: null,
-    sampleDataEnabled: isSampleDataEnabled(),
-  });
+    const dataFound = (autoSync.products.count ?? 0) > 0 || (autoSync.messages ?? 0) > 0;
+    const messageLimited = stored.length === ANALYSIS_MESSAGE_LIMIT;
+    return json({ ok: true as const, dataFound, autoSync, messageLimited });
   } catch (error) {
+    if (error instanceof Response) throw error;
+    console.error("Auto-sync action failed", error);
+    return json({ ok: false as const, error: "Auto-sync failed. Try syncing manually from the data hub." });
+  }
+}
+
+export async function loader({ request }: LoaderFunctionArgs) {
+  try {
+    const { session } = await authenticate.admin(request);
+    const shop = await ensureShop(prisma, session.shop);
+    const latestRun = await getLatestRun(prisma, shop.id);
+    const existingLocalData = await prisma.importedMessage.count({ where: { shopId: shop.id } });
+    const autoSyncNeeded = !latestRun && existingLocalData === 0;
+    const insight = normalizeInsightResult(parseRun(latestRun) ?? EMPTY_INSIGHT);
+    const [importedMessages, orderCount, productCount] = await Promise.all([
+      prisma.importedMessage.count({ where: { shopId: shop.id } }),
+      prisma.shopifyOrder.count({ where: { shopId: shop.id } }),
+      prisma.shopifyProduct.count({ where: { shopId: shop.id } }),
+    ]);
+    const isProduction = process.env.NODE_ENV === "production";
+    const plan = resolvePlan({
+      activePlanId: shop.plan as PlanId,
+      devOverride: getDevPlanOverride(),
+      devOverrideEnabled: process.env.ENABLE_DEV_PLAN_OVERRIDE === "true",
+      isProduction,
+    });
+    const usage = await getUsageSnapshot(prisma, shop.id, plan, new Date());
+    return json({
+      ...buildDashboardViewModel({ insight, importedMessages, hasRun: Boolean(latestRun) }),
+      orderCount,
+      productCount,
+      autoSyncNeeded,
+      loadError: null,
+      sampleDataEnabled: isSampleDataEnabled(),
+    });
+  } catch (error) {
+    if (error instanceof Response) throw error;
     console.error("Dashboard loader failed", error);
     return json({
       ...buildDashboardViewModel({ insight: EMPTY_INSIGHT, importedMessages: 0, hasRun: false }),
       orderCount: 0,
       productCount: 0,
-      autoSync: { attempted: false, ...EMPTY_SYNC },
+      autoSyncNeeded: false,
       loadError: "Some data could not be loaded. Your store data is safe. Try refreshing or run analysis again.",
       sampleDataEnabled: isSampleDataEnabled(),
     });
@@ -140,13 +146,37 @@ export default function Dashboard() {
     hasRun,
     orderCount,
     productCount,
-    autoSync,
+    autoSyncNeeded,
     loadError,
     sampleDataEnabled,
   } = useLoaderData<typeof loader>();
 
+  const syncer = useFetcher<typeof action>();
+  const revalidator = useRevalidator();
+
+  useEffect(() => {
+    if (autoSyncNeeded && syncer.state === "idle" && !syncer.data) {
+      syncer.submit({ intent: "auto-sync" }, { method: "post" });
+    }
+  }, [autoSyncNeeded, syncer]);
+
+  useEffect(() => {
+    if (syncer.state === "idle" && syncer.data && "ok" in syncer.data && syncer.data.ok && syncer.data.dataFound) {
+      revalidator.revalidate();
+    }
+  }, [syncer.state, syncer.data, revalidator]);
+
+  const isSyncing = syncer.state !== "idle" || (autoSyncNeeded && !syncer.data);
+  const syncAttempted = Boolean(syncer.data);
+  const syncError = syncer.data && "ok" in syncer.data && !syncer.data.ok
+    ? (syncer.data as { ok: false; error: string }).error
+    : null;
+  const messageLimited = syncer.data && "ok" in syncer.data && syncer.data.ok && "messageLimited" in syncer.data
+    ? (syncer.data as { messageLimited?: boolean }).messageLimited
+    : false;
+
   const navigation = useNavigation();
-  if (navigation.state === "loading") {
+  if (navigation.state === "loading" || isSyncing) {
     return <DashboardSkeleton />;
   }
 
@@ -163,9 +193,14 @@ export default function Dashboard() {
             <p>Your store data is safe. Try refreshing or run analysis again.</p>
           </Banner>
         ) : null}
+        {syncError ? (
+          <Banner tone="warning" title="Auto-sync failed">
+            <p>{syncError}</p>
+          </Banner>
+        ) : null}
         <EmptyStateCard
-          title={autoSync.attempted ? "No Shopify recovery data found yet" : "Sync product and order data to discover revenue opportunities"}
-          body={autoSync.attempted
+          title={syncAttempted ? "No Shopify recovery data found yet" : "Sync product and order data to discover revenue opportunities"}
+          body={syncAttempted
             ? "This store has no synced products or order notes that can be analyzed yet."
             : "Analyze products, order notes, and imported customer questions to identify the first recovery actions to take."}
           actionLabel="Open data hub"
@@ -273,6 +308,11 @@ export default function Dashboard() {
             <Button url="/app/import" variant="primary">Sync product and order data</Button>
             <Button url="/app/settings">Set average order value</Button>
           </InlineStack>
+        </Banner>
+      ) : null}
+      {messageLimited ? (
+        <Banner tone="info" title="Large message volume — analysis uses most recent 10,000">
+          <p>Your store has more than 10,000 imported messages. Analysis is based on the most recent 10,000 for performance.</p>
         </Banner>
       ) : null}
 

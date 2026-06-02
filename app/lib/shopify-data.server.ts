@@ -2,6 +2,7 @@ import type { NormalizedMessage, PageInput, ProductInput } from "~/lib/types";
 import type { PrismaClient } from "@prisma/client";
 import { getDelegate } from "~/lib/prisma-safe";
 import { getShopifyProductSchemaDiagnostics } from "~/lib/schema-diagnostics.server";
+import { processInBatches } from "~/lib/utils";
 
 export interface AdminLike {
   graphql: (
@@ -302,7 +303,8 @@ export async function syncShopifyData(
     if (!shopifyProduct?.upsert) {
       result.products = { ok: false, count: 0, skipped: false, error: "Product database model unavailable" };
     } else {
-      await Promise.all(products.map((product) => {
+      const upsertProduct = shopifyProduct.upsert.bind(shopifyProduct);
+      await processInBatches(products, 50, (product) => {
         const writeData: ShopifyProductWriteData = {
           title: product.title,
           handle: product.handle,
@@ -313,7 +315,7 @@ export async function syncShopifyData(
         if (includeTags) writeData.tags = JSON.stringify(product.tags ?? []);
         if (includeProductType) writeData.productType = product.productType ?? null;
         if (includeCollections) writeData.collections = JSON.stringify(product.collections ?? []);
-        return shopifyProduct.upsert?.({
+        return upsertProduct({
           where: { shopId_externalId: { shopId, externalId: product.id ?? product.title } },
           update: writeData,
           create: {
@@ -322,7 +324,7 @@ export async function syncShopifyData(
             ...writeData,
           },
         });
-      }));
+      });
       result.products = { ok: true, count: products.length };
     }
   } catch (error) {
@@ -339,31 +341,32 @@ export async function syncShopifyData(
     if (!shopifyOrder?.upsert) {
       result.orders = { ok: false, count: 0, skipped: true, reason: "Order storage unavailable" };
     } else {
-      await Promise.all(orders.map((order) =>
-    shopifyOrder.upsert?.({
-      where: { shopId_externalId: { shopId, externalId: order.id } },
-      update: {
-        name: order.name,
-        note: order.note,
-        customerRef: null,
-        tags: JSON.stringify(order.tags ?? []),
-        processedAt: order.processedAt ? new Date(order.processedAt) : new Date(order.createdAt),
-        rawJson: JSON.stringify(order),
-        syncedAt: now,
-      },
-      create: {
-        shopId,
-        externalId: order.id,
-        name: order.name,
-        note: order.note,
-        customerRef: null,
-        tags: JSON.stringify(order.tags ?? []),
-        processedAt: order.processedAt ? new Date(order.processedAt) : new Date(order.createdAt),
-        rawJson: JSON.stringify(order),
-        syncedAt: now,
-      },
-    }),
-      ));
+      const upsertOrder = shopifyOrder.upsert.bind(shopifyOrder);
+      await processInBatches(orders, 50, (order) =>
+        upsertOrder({
+          where: { shopId_externalId: { shopId, externalId: order.id } },
+          update: {
+            name: order.name,
+            note: order.note,
+            customerRef: null,
+            tags: JSON.stringify(order.tags ?? []),
+            processedAt: order.processedAt ? new Date(order.processedAt) : new Date(order.createdAt),
+            rawJson: JSON.stringify(order),
+            syncedAt: now,
+          },
+          create: {
+            shopId,
+            externalId: order.id,
+            name: order.name,
+            note: order.note,
+            customerRef: null,
+            tags: JSON.stringify(order.tags ?? []),
+            processedAt: order.processedAt ? new Date(order.processedAt) : new Date(order.createdAt),
+            rawJson: JSON.stringify(order),
+            syncedAt: now,
+          },
+        }),
+      );
       result.orders = { ok: true, count: orders.length };
     }
   } catch (error) {
@@ -427,21 +430,20 @@ export async function syncShopifyData(
     ]),
   ].filter((message): message is NonNullable<typeof message> => Boolean(message?.content.trim()));
 
-  let messages = 0;
-  if (!importedMessage?.findFirst || !importedMessage?.create) {
+  if (!importedMessage?.findMany || !importedMessage?.createMany) {
     return result;
   }
-  for (const message of messageInputs) {
-    const existing = await importedMessage.findFirst({
-      where: { shopId, externalId: message.externalId },
-      select: { id: true },
-    });
-    if (!existing) {
-      await importedMessage.create({ data: message });
-      messages += 1;
-    }
+  const externalIds = messageInputs.map((m) => m.externalId);
+  const existing = await importedMessage.findMany({
+    where: { shopId, externalId: { in: externalIds } },
+    select: { externalId: true },
+  });
+  const existingIds = new Set(existing.map((m: { externalId: string | null }) => m.externalId));
+  const newMessages = messageInputs.filter((m) => !existingIds.has(m.externalId));
+  if (newMessages.length > 0) {
+    await importedMessage.createMany({ data: newMessages, skipDuplicates: true });
   }
-  result.messages = messages;
+  result.messages = newMessages.length;
 
   return result;
 }
