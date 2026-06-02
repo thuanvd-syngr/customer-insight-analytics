@@ -8,7 +8,6 @@ import {
   ProgressBar,
   Select,
   Text,
-  TextField,
 } from "@shopify/polaris";
 import { useState } from "react";
 
@@ -294,6 +293,7 @@ export default function ImportPage() {
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
   const [source, setSource] = useState("manual");
+  const [messages, setMessages] = useState("");
   const busy = navigation.state !== "idle";
   return (
     <AppPage
@@ -510,7 +510,29 @@ export default function ImportPage() {
                 value={source}
                 onChange={setSource}
               />
-              <TextField label="Messages or CSV" name="raw" multiline={8} autoComplete="off" />
+              <div>
+                <label htmlFor="customer-messages" style={{ display: "block", marginBottom: 6, fontSize: 14, fontWeight: 500 }}>
+                  Messages or CSV
+                </label>
+                <textarea
+                  id="customer-messages"
+                  name="raw"
+                  value={messages}
+                  onChange={(e) => setMessages(e.target.value)}
+                  rows={12}
+                  style={{
+                    width: "100%",
+                    minHeight: "300px",
+                    padding: "12px",
+                    border: "1px solid #d0d0d0",
+                    borderRadius: "8px",
+                    fontFamily: "inherit",
+                    fontSize: "14px",
+                    resize: "vertical",
+                    boxSizing: "border-box",
+                  }}
+                />
+              </div>
               <Button submit loading={busy}>Add customer questions</Button>
             </BlockStack>
           </Form>
