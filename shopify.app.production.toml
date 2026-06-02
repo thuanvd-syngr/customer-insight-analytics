@@ -1,17 +1,15 @@
-client_id = "YOUR_PRODUCTION_CLIENT_ID"
+client_id = "05a51df01391fee2c1379df0ecfbe042"
 name = "Customer Insight Analytics"
 handle = "customer-insight-analytics"
-application_url = "https://customer-insight.example.com"
+application_url = "https://customer-insight-analytics-ww7zt533aa-as.a.run.app"
 embedded = true
 
 [access_scopes]
-scopes = "read_products,read_orders,read_customers,read_content"
+scopes = "read_products,read_orders,read_content"
 
 [auth]
 redirect_urls = [
-  "https://customer-insight.example.com/auth/callback",
-  "https://customer-insight.example.com/auth/shopify/callback",
-  "https://customer-insight.example.com/api/auth/callback"
+  "https://customer-insight-analytics-ww7zt533aa-as.a.run.app/auth/callback"
 ]
 
 [webhooks]
@@ -24,3 +22,15 @@ uri = "/webhooks/app/uninstalled"
 [[webhooks.subscriptions]]
 topics = ["app/scopes_update"]
 uri = "/webhooks/app/scopes_update"
+
+[[webhooks.subscriptions]]
+compliance_topics = ["customers/data_request"]
+uri = "/webhooks/customers/data_request"
+
+[[webhooks.subscriptions]]
+compliance_topics = ["customers/redact"]
+uri = "/webhooks/customers/redact"
+
+[[webhooks.subscriptions]]
+compliance_topics = ["shop/redact"]
+uri = "/webhooks/shop/redact"

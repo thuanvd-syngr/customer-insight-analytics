@@ -1,5 +1,7 @@
 # Deploy to Google Cloud Run
 
+For the current production-test workflow without a custom domain, use the detailed guide in `docs/CLOUD_RUN_TEST_DEPLOY.md`.
+
 ## 1. Create Cloud SQL Postgres
 
 ```bash
@@ -16,10 +18,11 @@ Create or update the production Partner app:
 
 - App URL: `https://YOUR_CLOUD_RUN_URL`
 - Redirect URL: `https://YOUR_CLOUD_RUN_URL/auth/callback`
-- Scopes: `read_products,read_orders,read_customers,read_content`
-- Webhooks: `/webhooks/app/uninstalled`, `/webhooks/app/scopes_update`
+- Scopes: `read_products,read_orders,read_content`
+- Webhooks: `/webhooks/app/uninstalled`, `/webhooks/app/scopes_update`, `/webhooks/customers/data_request`, `/webhooks/customers/redact`, `/webhooks/shop/redact`
+- App Store listing: add public Privacy Policy, Terms of Service, Support URL, and screenshots in Partner Dashboard.
 
-Update `shopify.app.production.toml` placeholders and run:
+Update all `shopify.app.production.toml` placeholders (`client_id`, `application_url`, and redirect URLs) and run:
 
 ```bash
 shopify app config use shopify.app.production.toml
@@ -37,7 +40,7 @@ gcloud run deploy customer-insight-analytics \
   --set-env-vars NODE_ENV=production
 ```
 
-Set secrets or env vars for `SHOPIFY_API_KEY`, `SHOPIFY_API_SECRET`, `SHOPIFY_APP_URL`, `DATABASE_URL`, `SCOPES=read_products,read_orders,read_customers,read_content`, `NODE_ENV=production`, and `SHOPIFY_BILLING_TEST=false`. Prefer Secret Manager for secrets.
+Set secrets or env vars for `SHOPIFY_API_KEY`, `SHOPIFY_API_SECRET`, `SHOPIFY_APP_URL`, `HOST`, `DATABASE_URL`, `SCOPES=read_products,read_orders,read_content`, `NODE_ENV=production`, and `SHOPIFY_BILLING_TEST=false`. Prefer Secret Manager for secrets.
 
 Cloud SQL Unix socket URLs are supported by Prisma's PostgreSQL connector when the host is encoded in `DATABASE_URL`, for example:
 
@@ -53,3 +56,4 @@ curl https://YOUR_CLOUD_RUN_URL/health/config
 ```
 
 Run a test install from the Partner Dashboard, sync product and order data, import real customer questions, run analysis, generate a weekly report, and uninstall to verify webhook cleanup.
+Validate billing on a Shopify test store with `SHOPIFY_BILLING_TEST=true`, then set `SHOPIFY_BILLING_TEST=false` for production billing.
