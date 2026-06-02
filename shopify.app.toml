@@ -36,3 +36,15 @@ uri = "/webhooks/customers/redact"
 [[webhooks.subscriptions]]
 topics = ["shop/redact"]
 uri = "/webhooks/shop/redact"
+
+[[webhooks.subscriptions]]
+topics = ["products/create"]
+uri = "/webhooks/products/create"
+
+[[webhooks.subscriptions]]
+topics = ["products/update"]
+uri = "/webhooks/products/update"
+
+[[webhooks.subscriptions]]
+topics = ["orders/create"]
+uri = "/webhooks/orders/create"

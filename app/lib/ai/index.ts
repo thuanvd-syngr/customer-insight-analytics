@@ -1,7 +1,8 @@
-import type { AIProvider, AIProviderId, WeeklySummaryInput } from "./types";
+import type { AIProvider, AIProviderId, ContentGenerationInput, GeneratedContent, WeeklySummaryInput } from "./types";
 import { GeminiProvider } from "./gemini-provider";
 import { GroqProvider } from "./groq-provider";
 import { MockProvider } from "./mock-provider";
+import { buildRuleBasedContent } from "./content-generator";
 
 class OffProvider implements AIProvider {
   id = "off" as const;
@@ -13,6 +14,10 @@ class OffProvider implements AIProvider {
 
   async generateWeeklySummary(_input: WeeklySummaryInput): Promise<string> {
     throw new Error("AI provider is off");
+  }
+
+  async generateContent(input: ContentGenerationInput): Promise<GeneratedContent> {
+    return buildRuleBasedContent(input);
   }
 }
 
@@ -29,6 +34,29 @@ export function isAIEnabled(): boolean {
   return provider.id !== "off" && provider.isConfigured();
 }
 
-export type { AIProvider, AIProviderId, WeeklySummaryInput } from "./types";
+// Generates content using the configured AI provider, falling back to rule-based
+// if AI is off or throws. This is the primary entry point for content generation.
+export async function generateContentWithFallback(
+  input: ContentGenerationInput,
+): Promise<GeneratedContent> {
+  const provider = getAIProvider();
+  try {
+    return await provider.generateContent(input);
+  } catch {
+    return buildRuleBasedContent(input);
+  }
+}
+
+export type {
+  AIProvider,
+  AIProviderId,
+  ContentGenerationInput,
+  ContentType,
+  FaqEntry,
+  GeneratedContent,
+  WeeklySummaryInput,
+} from "./types";
+export { CONTENT_TYPE_LABELS } from "./types";
 export { MockProvider } from "./mock-provider";
 export { buildMockSummary, buildSummaryPrompt } from "./summary";
+export { buildRuleBasedContent, buildContentPrompt } from "./content-generator";

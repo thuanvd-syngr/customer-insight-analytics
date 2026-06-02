@@ -1,0 +1,139 @@
+{% comment %}
+  Product FAQ App Block — Customer Insight Analytics
+  Renders product-specific FAQs with optional accordion style and JSON-LD schema.
+  Settings: accordion, max_faqs, show_shipping, show_return, show_warranty, show_payment
+{% endcomment %}
+
+{%- assign ns = 'cia-faq' -%}
+{%- assign faq_metafield = product.metafields.customer_insight.faq_json -%}
+{%- assign raw_faqs = faq_metafield.value | default: '[]' -%}
+
+{%- if raw_faqs == '[]' or raw_faqs == blank -%}
+  {%- comment %} No FAQs — render nothing so theme is unaffected {% endcomment -%}
+{%- else -%}
+
+<div
+  class="cia-faq-block"
+  id="{{ ns }}-{{ product.id }}"
+  aria-label="{{ block.settings.heading | default: 'Frequently Asked Questions' }}"
+  data-accordion="{{ block.settings.accordion }}"
+>
+  <h3 class="cia-faq-heading">{{ block.settings.heading | default: 'Frequently Asked Questions' }}</h3>
+
+  <div class="cia-faq-list">
+    {%- assign faqs = raw_faqs | parse_json -%}
+    {%- assign max = block.settings.max_faqs | default: 6 | plus: 0 -%}
+    {%- assign count = 0 -%}
+    {%- for faq in faqs -%}
+      {%- if count >= max -%}{%- break -%}{%- endif -%}
+      <div class="cia-faq-item" itemscope itemtype="https://schema.org/Question">
+        <button
+          class="cia-faq-q"
+          aria-expanded="false"
+          aria-controls="{{ ns }}-a-{{ product.id }}-{{ forloop.index }}"
+          itemprop="name"
+        >
+          {{ faq.question | escape }}
+          <span class="cia-faq-icon" aria-hidden="true">+</span>
+        </button>
+        <div
+          class="cia-faq-a"
+          id="{{ ns }}-a-{{ product.id }}-{{ forloop.index }}"
+          hidden
+          itemscope
+          itemtype="https://schema.org/Answer"
+        >
+          <div itemprop="text">{{ faq.answer | escape }}</div>
+        </div>
+      </div>
+      {%- assign count = count | plus: 1 -%}
+    {%- endfor -%}
+  </div>
+
+  {%- comment %} JSON-LD FAQ Schema {% endcomment -%}
+  <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "FAQPage",
+      "mainEntity": [
+        {%- for faq in faqs -%}
+          {%- if forloop.index0 < max -%}
+            {%- unless forloop.first == false and forloop.index0 == 0 -%}{%- endunless -%}
+            {%- if forloop.index0 > 0 -%},{%- endif -%}
+            {
+              "@type": "Question",
+              "name": {{ faq.question | json }},
+              "acceptedAnswer": {
+                "@type": "Answer",
+                "text": {{ faq.answer | json }}
+              }
+            }
+          {%- endif -%}
+        {%- endfor -%}
+      ]
+    }
+  </script>
+</div>
+
+{%- endif -%}
+
+{% schema %}
+{
+  "name": "Product FAQ",
+  "target": "section",
+  "javascript": "product-faq.js",
+  "stylesheet": "product-faq.css",
+  "settings": [
+    {
+      "type": "text",
+      "id": "heading",
+      "label": "Heading",
+      "default": "Frequently Asked Questions"
+    },
+    {
+      "type": "checkbox",
+      "id": "accordion",
+      "label": "Use accordion style",
+      "default": true
+    },
+    {
+      "type": "range",
+      "id": "max_faqs",
+      "min": 1,
+      "max": 20,
+      "step": 1,
+      "label": "Max FAQs shown",
+      "default": 6
+    },
+    {
+      "type": "checkbox",
+      "id": "show_shipping",
+      "label": "Include shipping FAQs",
+      "default": true
+    },
+    {
+      "type": "checkbox",
+      "id": "show_return",
+      "label": "Include return FAQs",
+      "default": true
+    },
+    {
+      "type": "checkbox",
+      "id": "show_warranty",
+      "label": "Include warranty FAQs",
+      "default": false
+    },
+    {
+      "type": "checkbox",
+      "id": "show_payment",
+      "label": "Include payment FAQs",
+      "default": false
+    }
+  ],
+  "presets": [
+    {
+      "name": "Product FAQ"
+    }
+  ]
+}
+{% endschema %}

@@ -1,4 +1,5 @@
-import type { AIProvider, WeeklySummaryInput } from "./types";
+import type { AIProvider, ContentGenerationInput, GeneratedContent, WeeklySummaryInput } from "./types";
+import { buildContentPrompt, buildRuleBasedContent, parseAIContentResponse } from "./content-generator";
 import { buildSummaryPrompt } from "./summary";
 
 export class GroqProvider implements AIProvider {
@@ -9,8 +10,7 @@ export class GroqProvider implements AIProvider {
     return Boolean(process.env.GROQ_API_KEY);
   }
 
-  async generateWeeklySummary(input: WeeklySummaryInput): Promise<string> {
-    const prompt = buildSummaryPrompt(input);
+  private async chat(system: string, user: string): Promise<string> {
     const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -20,16 +20,33 @@ export class GroqProvider implements AIProvider {
       body: JSON.stringify({
         model: process.env.GROQ_MODEL ?? "llama-3.1-8b-instant",
         messages: [
-          { role: "system", content: prompt.system },
-          { role: "user", content: prompt.user },
+          { role: "system", content: system },
+          { role: "user", content: user },
         ],
-        temperature: 0.2,
+        temperature: 0.3,
       }),
     });
-    if (!res.ok) throw new Error(`Groq summary failed: ${res.status}`);
+    if (!res.ok) throw new Error(`Groq API failed: ${res.status}`);
     const body = (await res.json()) as {
       choices?: Array<{ message?: { content?: string } }>;
     };
     return body.choices?.[0]?.message?.content ?? "";
+  }
+
+  async generateWeeklySummary(input: WeeklySummaryInput): Promise<string> {
+    const prompt = buildSummaryPrompt(input);
+    return this.chat(prompt.system, prompt.user);
+  }
+
+  async generateContent(input: ContentGenerationInput): Promise<GeneratedContent> {
+    try {
+      const prompt = buildContentPrompt(input);
+      const raw = await this.chat(prompt.system, prompt.user);
+      const parsed = parseAIContentResponse(raw, input);
+      if (parsed) return parsed;
+    } catch {
+      // fall through to rule-based
+    }
+    return buildRuleBasedContent(input);
   }
 }

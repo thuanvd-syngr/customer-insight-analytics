@@ -18,6 +18,7 @@ import { runAnalysis } from "~/lib/engine";
 import { EMPTY_INSIGHT, normalizeInsightResult } from "~/lib/types";
 import { ensureShop, getLatestRun, markOnboarded, parseRun, saveInsightRun } from "~/lib/shop.server";
 import { syncShopifyData } from "~/lib/shopify-data.server";
+import { getPublishedCounts } from "~/lib/publish/shopify-publisher.server";
 import { isSampleDataEnabled } from "~/lib/sample-data";
 import { authenticate } from "~/shopify.server";
 import { ANALYSIS_MESSAGE_LIMIT, parseStringArray } from "~/lib/utils";
@@ -106,10 +107,11 @@ export async function loader({ request }: LoaderFunctionArgs) {
     const existingLocalData = await prisma.importedMessage.count({ where: { shopId: shop.id } });
     const autoSyncNeeded = !latestRun && existingLocalData === 0;
     const insight = normalizeInsightResult(parseRun(latestRun) ?? EMPTY_INSIGHT);
-    const [importedMessages, orderCount, productCount] = await Promise.all([
+    const [importedMessages, orderCount, productCount, publishedCounts] = await Promise.all([
       prisma.importedMessage.count({ where: { shopId: shop.id } }),
       prisma.shopifyOrder.count({ where: { shopId: shop.id } }),
       prisma.shopifyProduct.count({ where: { shopId: shop.id } }),
+      getPublishedCounts(prisma, shop.id),
     ]);
     const isProduction = process.env.NODE_ENV === "production";
     const plan = resolvePlan({
@@ -123,6 +125,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       ...buildDashboardViewModel({ insight, importedMessages, hasRun: Boolean(latestRun) }),
       orderCount,
       productCount,
+      publishedTotal: publishedCounts.total,
       autoSyncNeeded,
       loadError: null,
       sampleDataEnabled: isSampleDataEnabled(),
@@ -134,6 +137,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       ...buildDashboardViewModel({ insight: EMPTY_INSIGHT, importedMessages: 0, hasRun: false }),
       orderCount: 0,
       productCount: 0,
+      publishedTotal: 0,
       autoSyncNeeded: false,
       loadError: "Some data could not be loaded. Your store data is safe. Try refreshing or run analysis again.",
       sampleDataEnabled: isSampleDataEnabled(),
@@ -151,6 +155,7 @@ export default function Dashboard() {
     hasRun,
     orderCount,
     productCount,
+    publishedTotal,
     autoSyncNeeded,
     loadError,
     sampleDataEnabled,
@@ -243,6 +248,20 @@ export default function Dashboard() {
               completed: false,
               actionLabel: "Open FAQ builder",
               actionUrl: "/app/faq",
+            },
+            {
+              title: "Publish content",
+              description: "Push FAQ pages and blog articles to your Shopify store.",
+              completed: publishedTotal > 0,
+              actionLabel: "Go to Publish",
+              actionUrl: "/app/publish",
+            },
+            {
+              title: "Add FAQ Widget",
+              description: "Embed product FAQs directly on product pages using a Theme App Block.",
+              completed: false,
+              actionLabel: "Widget setup guide",
+              actionUrl: "/app/widget",
             },
           ]}
         />
@@ -371,6 +390,12 @@ export default function Dashboard() {
               <div className="cia-eyebrow">Product Opportunities</div>
               <Text as="p" variant="headingLg">
                 {formatNumber(productOpportunityCount)}
+              </Text>
+            </div>
+            <div className="cia-muted-panel">
+              <div className="cia-eyebrow">Published Assets</div>
+              <Text as="p" variant="headingLg">
+                {formatNumber(publishedTotal)}
               </Text>
             </div>
           </div>

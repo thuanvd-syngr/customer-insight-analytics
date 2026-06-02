@@ -30,8 +30,12 @@ export default function EmbeddedApp() {
         <a href="/app/products">Products</a>
         <a href="/app/competitors">Competitors</a>
         <a href="/app/faq">FAQ</a>
+        <a href="/app/publish">Publish</a>
+        <a href="/app/bulk">Bulk Actions</a>
+        <a href="/app/widget">FAQ Widget</a>
         <a href="/app/import">Import</a>
         <a href="/app/reports">Reports</a>
+        <a href="/app/email/send">Email Reports</a>
         <a href="/app/settings">Settings</a>
         <a href="/app/billing">Billing</a>
       </NavMenu>

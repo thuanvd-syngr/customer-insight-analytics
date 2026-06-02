@@ -36,10 +36,15 @@ import { PLANS } from "~/lib/billing/plans";
 import {
   buildExecutiveHtmlReport,
   buildExecutiveReport,
+  buildExecutiveSummary,
+  buildMonthlyReport,
+  buildQuarterlyReport,
+  buildROIEstimate,
   buildReportCsv,
   buildSimplePdf,
   buildWeeklyEmailHtml,
 } from "~/lib/report-export.server";
+import { getPublishedCounts } from "~/lib/publish/shopify-publisher.server";
 import { ensureShop, getLatestRun, parseRun } from "~/lib/shop.server";
 import { normalizeInsightResult } from "~/lib/types";
 import { authenticate } from "~/shopify.server";
@@ -63,7 +68,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
     const { shop, plan } = await context(request);
     const weeklyReport = getDelegate(prisma, "weeklyReport");
     const weeklyEmail = getDelegate(prisma, "weeklyEmail");
-    const [reports, weeklyEmails, latestRun] = await Promise.all([
+    const appSetting = getDelegate(prisma, "appSetting");
+    const [reports, weeklyEmails, latestRun, publishedCounts, reportEmailSetting] = await Promise.all([
       weeklyReport?.findMany
         ? weeklyReport.findMany({ where: { shopId: shop.id }, orderBy: { createdAt: "desc" }, take: 10 })
         : [],
@@ -71,10 +77,13 @@ export async function loader({ request }: LoaderFunctionArgs) {
         ? weeklyEmail.findMany({ where: { shopId: shop.id }, orderBy: { generatedAt: "desc" }, take: 10 })
         : [],
       getLatestRun(prisma, shop.id),
+      getPublishedCounts(prisma, shop.id),
+      appSetting?.findUnique
+        ? appSetting.findUnique({ where: { shopId_key: { shopId: shop.id, key: "reportEmail" } } })
+        : Promise.resolve(null),
     ]);
-  // parseRun already returns a normalized InsightResult, so the executive view
-  // can render straight from the latest analysis even before a report is saved.
   const latestInsight = latestRun ? parseRun(latestRun) : null;
+  const roiEstimate = latestInsight ? buildROIEstimate(latestInsight, publishedCounts) : null;
   return json({
     reports,
     weeklyEmails,
@@ -82,6 +91,10 @@ export async function loader({ request }: LoaderFunctionArgs) {
     hasRun: Boolean(latestRun),
     plan,
     canExport: canExportReport(plan).allowed,
+    publishedCounts,
+    roiEstimate,
+    reportEmail: (reportEmailSetting as { value?: string } | null)?.value ?? "",
+    executiveSummary: latestInsight ? buildExecutiveSummary(latestInsight) : null,
     loadError: null,
   });
   } catch (error) {
@@ -93,6 +106,10 @@ export async function loader({ request }: LoaderFunctionArgs) {
       hasRun: false,
       plan: "free",
       canExport: false,
+      publishedCounts: { total: 0, pages: 0, blogs: 0, productFaqs: 0 },
+      roiEstimate: null,
+      reportEmail: "",
+      executiveSummary: null,
       loadError: "Some data could not be loaded. Your store data is safe. Try refreshing or run analysis again.",
     });
   }
@@ -191,6 +208,40 @@ export async function action({ request }: ActionFunctionArgs) {
   const provider = getAIProvider();
   const useAI = PLANS[plan].features.aiWeeklySummary && provider.isConfigured();
   const input = { shopDomain, insight, weekStart, weekEnd };
+  if (intent === "monthly" || intent === "quarterly") {
+    const gate = canExportReport(plan);
+    if (!gate.allowed) return json({ error: gate.reason }, { status: 403 });
+    if (!run || !insight) return redirect("/app/import");
+    const now = new Date();
+    const periodEnd = now.toISOString().slice(0, 10);
+    const periodDays = intent === "monthly" ? 30 : 90;
+    const periodStart = new Date(now.getTime() - periodDays * 86_400_000).toISOString().slice(0, 10);
+    const published = await getPublishedCounts(prisma, shop.id);
+    const reportText = intent === "monthly"
+      ? buildMonthlyReport({ shopDomain, insight, monthStart: periodStart, monthEnd: periodEnd, published })
+      : buildQuarterlyReport({ shopDomain, insight, quarterStart: periodStart, quarterEnd: periodEnd, published });
+    const filename = `${intent}-report-${periodEnd}`;
+    const format = String(form.get("format") ?? "markdown");
+    if (format === "html") {
+      return new Response(buildExecutiveHtmlReport({ shopDomain, insight, weekStart: periodStart, weekEnd: periodEnd }), {
+        headers: { "Content-Type": "text/html; charset=utf-8", "Content-Disposition": `attachment; filename="${filename}.html"` },
+      });
+    }
+    if (format === "pdf") {
+      return new Response(Buffer.from(buildSimplePdf(reportText)), {
+        headers: { "Content-Type": "application/pdf", "Content-Disposition": `attachment; filename="${filename}.pdf"` },
+      });
+    }
+    if (format === "csv") {
+      return new Response(buildReportCsv(insight), {
+        headers: { "Content-Type": "text/csv; charset=utf-8", "Content-Disposition": `attachment; filename="${filename}.csv"` },
+      });
+    }
+    return new Response(reportText, {
+      headers: { "Content-Type": "text/markdown; charset=utf-8", "Content-Disposition": `attachment; filename="${filename}.md"` },
+    });
+  }
+
   if (intent === "weekly-email") {
     const html = buildWeeklyEmailHtml(input);
     const weeklyEmail = getDelegate(prisma, "weeklyEmail");
@@ -233,7 +284,18 @@ export async function action({ request }: ActionFunctionArgs) {
 const IMPACT_LEVEL: Record<string, PriorityLevel> = { low: "low", medium: "medium", high: "high" };
 
 export default function Reports() {
-  const { reports, weeklyEmails, latestInsight, hasRun, canExport, loadError } = useLoaderData<typeof loader>();
+  const {
+    reports,
+    weeklyEmails,
+    latestInsight,
+    hasRun,
+    canExport,
+    publishedCounts,
+    roiEstimate,
+    reportEmail,
+    executiveSummary,
+    loadError,
+  } = useLoaderData<typeof loader>();
   const navigation = useNavigation();
   if (navigation.state === "loading") return <ListSkeleton />;
 
@@ -583,6 +645,108 @@ export default function Reports() {
                 </Text>
               </Box>
             )}
+          </Card>
+        </BlockStack>
+
+        {roiEstimate && roiEstimate.estimatedMonthlyRecovery > 0 ? (
+          <BlockStack gap="300">
+            <SectionHeader
+              title="Published Assets ROI Estimate"
+              description="Conservative estimate of revenue recovery from published content based on conversion lift model."
+            />
+            <div className="cia-three-grid">
+              <Card>
+                <BlockStack gap="150">
+                  <Text as="p" variant="bodySm" tone="subdued">Est. monthly recovery</Text>
+                  <Text as="p" variant="headingLg">{`$${formatNumber(roiEstimate.estimatedMonthlyRecovery)}`}</Text>
+                  <Text as="p" variant="bodySm" tone="subdued">{`${roiEstimate.estimatedConversionLift}% conversion lift`}</Text>
+                </BlockStack>
+              </Card>
+              <Card>
+                <BlockStack gap="150">
+                  <Text as="p" variant="bodySm" tone="subdued">Est. annual recovery</Text>
+                  <Text as="p" variant="headingLg">{`$${formatNumber(roiEstimate.estimatedAnnualRecovery)}`}</Text>
+                  <Text as="p" variant="bodySm" tone="subdued">{`${publishedCounts.total} content pieces published`}</Text>
+                </BlockStack>
+              </Card>
+              <Card>
+                <BlockStack gap="150">
+                  <Text as="p" variant="bodySm" tone="subdued">ROI multiple</Text>
+                  <Text as="p" variant="headingLg">{`${roiEstimate.roiMultiple}x`}</Text>
+                  <Text as="p" variant="bodySm" tone="subdued">vs. content creation cost</Text>
+                </BlockStack>
+              </Card>
+            </div>
+          </BlockStack>
+        ) : null}
+
+        {executiveSummary ? (
+          <BlockStack gap="300">
+            <SectionHeader
+              title="Executive Summary"
+              description="Quick-read snapshot for operators and stakeholders."
+            />
+            <Card>
+              <pre style={{ fontFamily: "monospace", fontSize: 13, whiteSpace: "pre-wrap", margin: 0 }}>
+                {executiveSummary}
+              </pre>
+            </Card>
+          </BlockStack>
+        ) : null}
+
+        <BlockStack gap="300">
+          <SectionHeader
+            title="Monthly & Quarterly Reports"
+            description="Extended period reports with published asset ROI and full opportunity breakdown."
+          />
+          <Card>
+            <BlockStack gap="300">
+              <Text as="h3" variant="headingSm">Generate extended reports</Text>
+              <Text as="p" variant="bodySm" tone="subdued">
+                Monthly and quarterly reports include storewide gaps, product gaps, competitor threats, recovery actions, and published content ROI.
+              </Text>
+              {canExport && hasRun ? (
+                <InlineStack gap="200" wrap>
+                  {(["markdown", "html", "pdf", "csv"] as const).map((fmt) => (
+                    <Form method="post" key={`monthly-${fmt}`}>
+                      <input type="hidden" name="intent" value="monthly" />
+                      <input type="hidden" name="format" value={fmt} />
+                      <Button submit size="slim">{`Monthly ${fmt.toUpperCase()}`}</Button>
+                    </Form>
+                  ))}
+                </InlineStack>
+              ) : null}
+              {canExport && hasRun ? (
+                <InlineStack gap="200" wrap>
+                  {(["markdown", "html", "pdf", "csv"] as const).map((fmt) => (
+                    <Form method="post" key={`quarterly-${fmt}`}>
+                      <input type="hidden" name="intent" value="quarterly" />
+                      <input type="hidden" name="format" value={fmt} />
+                      <Button submit size="slim">{`Quarterly ${fmt.toUpperCase()}`}</Button>
+                    </Form>
+                  ))}
+                </InlineStack>
+              ) : null}
+              {!canExport ? (
+                <Text as="p" variant="bodySm" tone="subdued">
+                  Monthly and quarterly report export is available on Pro plan.
+                </Text>
+              ) : null}
+              {!hasRun ? (
+                <Text as="p" variant="bodySm" tone="subdued">
+                  Run analysis to enable extended reports.
+                </Text>
+              ) : null}
+              {reportEmail ? (
+                <Text as="p" variant="bodySm" tone="subdued">
+                  {`Report email: ${reportEmail} — copy exported HTML into your email provider.`}
+                </Text>
+              ) : (
+                <Text as="p" variant="bodySm" tone="subdued">
+                  Set a report email in Settings to include it in report exports.
+                </Text>
+              )}
+            </BlockStack>
           </Card>
         </BlockStack>
 

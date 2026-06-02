@@ -1,6 +1,195 @@
 import type { InsightResult } from "~/lib/types";
 import { normalizeInsightResult } from "~/lib/types";
 
+export type ReportPeriod = "weekly" | "monthly" | "quarterly";
+
+export interface ROIEstimate {
+  publishedPages: number;
+  publishedBlogs: number;
+  publishedFaqs: number;
+  estimatedConversionLift: number; // percentage points
+  estimatedMonthlyRecovery: number; // USD
+  estimatedAnnualRecovery: number;
+  roiMultiple: number;
+  methodology: string;
+}
+
+// Estimates ROI based on published content counts and the insight's revenue opportunity.
+// Uses conservative conversion lift assumptions.
+export function buildROIEstimate(
+  insight: InsightResult,
+  published: { pages: number; blogs: number; productFaqs: number },
+): ROIEstimate {
+  const safe = normalizeInsightResult(insight);
+  const totalPublished = published.pages + published.blogs + published.productFaqs;
+  // Each published piece of content addresses a buying objection.
+  // Conservative: each piece lifts conversion 0.3% for pages, 0.2% for blogs.
+  const conversionLift =
+    published.pages * 0.3 + published.blogs * 0.2 + published.productFaqs * 0.15;
+  const baseMonthly = safe.revenueOpportunity.estimatedHigh;
+  const estimatedMonthlyRecovery = Math.round(baseMonthly * (conversionLift / 100));
+  const estimatedAnnualRecovery = estimatedMonthlyRecovery * 12;
+  // ROI multiple: recovery vs assumed content creation time cost ($50/hr * 0.5hr per piece).
+  const contentCost = Math.max(1, totalPublished * 25);
+  const roiMultiple = estimatedAnnualRecovery > 0 ? Math.round(estimatedAnnualRecovery / contentCost) : 0;
+
+  return {
+    publishedPages: published.pages,
+    publishedBlogs: published.blogs,
+    publishedFaqs: published.productFaqs,
+    estimatedConversionLift: Math.round(conversionLift * 10) / 10,
+    estimatedMonthlyRecovery,
+    estimatedAnnualRecovery,
+    roiMultiple,
+    methodology:
+      "Conservative estimate: 0.3% conversion lift per published FAQ page, 0.2% per blog article, 0.15% per product FAQ. Applied to revenue opportunity from latest analysis.",
+  };
+}
+
+export function buildMonthlyReport(input: {
+  shopDomain: string;
+  insight: InsightResult;
+  monthStart: string;
+  monthEnd: string;
+  published?: { pages: number; blogs: number; productFaqs: number };
+}): string {
+  const { shopDomain, insight, monthStart, monthEnd, published } = input;
+  const safe = normalizeInsightResult(insight);
+  const roi = published ? buildROIEstimate(insight, published) : null;
+
+  return [
+    "# Monthly Revenue Recovery Report",
+    "",
+    `Shop: ${shopDomain}`,
+    `Period: ${monthStart} to ${monthEnd}`,
+    `Insight score: ${safe.insightScore}/100`,
+    `Revenue at risk: ${safe.revenueOpportunity.headline}`,
+    "",
+    "## Executive Summary",
+    `- ${safe.storewideOpportunities.length} storewide buying objections detected`,
+    `- ${safe.contentGaps.length} product content gaps identified`,
+    `- ${safe.competitors.length} competitor(s) mentioned by customers`,
+    `- ${safe.messageCount} customer questions analyzed`,
+    "",
+    "## Storewide Gaps",
+    ...safe.storewideOpportunities.slice(0, 8).map(
+      (item) => `- ${item.label}: ${item.mentionCount} mentions (${item.severity} severity)`,
+    ),
+    "",
+    "## Product Gaps",
+    ...safe.contentGaps.slice(0, 8).map(
+      (item) => `- ${item.productTitle}: missing ${item.missingSections.join(", ")}`,
+    ),
+    "",
+    "## Competitor Threats",
+    safe.competitors.length > 0
+      ? safe.competitors.slice(0, 5).map((c) => `- ${c.name}: ${c.count} mentions`).join("\n")
+      : "- No competitor brands detected this period.",
+    "",
+    "## Recovery Actions",
+    ...safe.revenueOpportunity.quickWins.slice(0, 5).map((w) => `- ${w.title}: ${w.action}`),
+    "",
+    ...(roi
+      ? [
+          "## Published Assets ROI",
+          `- Pages published: ${roi.publishedPages}`,
+          `- Blog articles: ${roi.publishedBlogs}`,
+          `- Product FAQs: ${roi.publishedFaqs}`,
+          `- Estimated conversion lift: ${roi.estimatedConversionLift}%`,
+          `- Est. monthly recovery: $${roi.estimatedMonthlyRecovery}`,
+          `- Est. annual recovery: $${roi.estimatedAnnualRecovery}`,
+          `- ROI multiple: ${roi.roiMultiple}x`,
+          "",
+        ]
+      : []),
+  ].join("\n");
+}
+
+export function buildQuarterlyReport(input: {
+  shopDomain: string;
+  insight: InsightResult;
+  quarterStart: string;
+  quarterEnd: string;
+  published?: { pages: number; blogs: number; productFaqs: number };
+}): string {
+  const { shopDomain, insight, quarterStart, quarterEnd, published } = input;
+  const safe = normalizeInsightResult(insight);
+  const roi = published ? buildROIEstimate(insight, published) : null;
+
+  const topFriction = safe.questionOpportunities
+    .slice(0, 5)
+    .map((q) => `- ${q.label}: ${q.count} mentions, ${q.severity} severity, ${q.suggestedAction}`)
+    .join("\n");
+
+  return [
+    "# Quarterly Executive Revenue Recovery Report",
+    "",
+    `Shop: ${shopDomain}`,
+    `Quarter: ${quarterStart} to ${quarterEnd}`,
+    `Recovery score: ${safe.insightScore}/100`,
+    "",
+    "## Executive Summary",
+    `Revenue at risk: ${safe.revenueOpportunity.headline}`,
+    `Top friction: ${safe.revenueOpportunity.topFriction?.label ?? "Not yet analyzed"}`,
+    `Storewide opportunities: ${safe.storewideOpportunities.length}`,
+    `Product opportunities: ${safe.contentGaps.length + safe.productConfusion.length}`,
+    `Competitor threats: ${safe.competitors.length}`,
+    `Total messages analyzed: ${safe.messageCount}`,
+    "",
+    "## Top Buying Friction",
+    topFriction || "- No friction themes detected. Import customer conversations to unlock insights.",
+    "",
+    "## Storewide Opportunities",
+    ...safe.storewideOpportunities
+      .slice(0, 10)
+      .map((item) => `- [${item.severity.toUpperCase()}] ${item.label}: ${item.mentionCount} mentions — ${item.suggestedAction}`),
+    "",
+    "## Product Opportunities",
+    ...safe.contentGaps
+      .slice(0, 8)
+      .map((item) => `- ${item.productTitle}: ${item.missingSections.join(", ")} (score ${item.contentGapScore}/100)`),
+    "",
+    "## Competitor Analysis",
+    safe.competitors.length > 0
+      ? safe.competitors
+          .slice(0, 8)
+          .map((c) => `- ${c.name}: ${c.count} mentions${c.exampleQuote ? ` — "${c.exampleQuote}"` : ""}`)
+          .join("\n")
+      : "- No competitor brand mentions detected.",
+    "",
+    "## Recommended Q-Actions",
+    ...safe.revenueOpportunity.quickWins.slice(0, 8).map((w) => `- ${w.title} (${w.impact} impact): ${w.action}`),
+    "",
+    ...(roi
+      ? [
+          "## Published Assets & ROI",
+          `- Content published: ${roi.publishedPages + roi.publishedBlogs + roi.publishedFaqs} pieces`,
+          `  - FAQ pages: ${roi.publishedPages}`,
+          `  - Blog articles: ${roi.publishedBlogs}`,
+          `  - Product FAQs: ${roi.publishedFaqs}`,
+          `- Estimated conversion lift: ${roi.estimatedConversionLift}%`,
+          `- Est. monthly recovery: $${roi.estimatedMonthlyRecovery}`,
+          `- Est. annual recovery: $${roi.estimatedAnnualRecovery}`,
+          `- ROI multiple: ${roi.roiMultiple}x`,
+          `- Methodology: ${roi.methodology}`,
+          "",
+        ]
+      : []),
+  ].join("\n");
+}
+
+export function buildExecutiveSummary(insight: InsightResult): string {
+  const safe = normalizeInsightResult(insight);
+  return [
+    `Recovery score: ${safe.insightScore}/100`,
+    `Revenue at risk: ${safe.revenueOpportunity.headline}`,
+    `Top friction: ${safe.revenueOpportunity.topFriction?.label ?? "Add customer questions to unlock"}`,
+    `Storewide opportunities: ${safe.storewideOpportunities.length}`,
+    `Product gaps: ${safe.contentGaps.length}`,
+    `Competitor threats: ${safe.competitors.length}`,
+  ].join("\n");
+}
+
 export function buildExecutiveReport(input: {
   shopDomain: string;
   insight: InsightResult;

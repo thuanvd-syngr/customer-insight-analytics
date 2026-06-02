@@ -1,7 +1,7 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { json, redirect } from "@remix-run/node";
 import { Form, useActionData, useLoaderData, useNavigation } from "@remix-run/react";
-import { Badge, Banner, BlockStack, Box, Button, Card, Divider, InlineGrid, InlineStack, Text, TextField } from "@shopify/polaris";
+import { Badge, Banner, BlockStack, Box, Button, Card, Divider, InlineGrid, InlineStack, Text } from "@shopify/polaris";
 
 import {
   AppPage,
@@ -16,12 +16,23 @@ import {
   type PriorityLevel,
 } from "~/components";
 import prisma from "~/db.server";
-import { getAIProvider } from "~/lib/ai";
+import { generateContentWithFallback, getAIProvider, isAIEnabled, CONTENT_TYPE_LABELS } from "~/lib/ai";
+import type { ContentType } from "~/lib/ai";
 import { getDevPlanOverride, resolvePlan, type PlanId } from "~/lib/billing";
 import { PLANS } from "~/lib/billing/plans";
 import { faqToHtml, generateFaqFromOpportunity, type GeneratedFaq } from "~/lib/faq-generator";
 import { ensureShop, getLatestRun, parseRun } from "~/lib/shop.server";
 import { publishGeneratedFaq, rollbackGeneratedFaq } from "~/lib/shopify-publish.server";
+import {
+  DEFAULT_FAQS,
+  PAGE_TYPE_GROUPS,
+  type PageContentType,
+  type FaqItem,
+} from "~/lib/publish";
+import {
+  publishFaqAsShopifyPage,
+  publishFaqAsBlogArticle,
+} from "~/lib/publish/shopify-publisher.server";
 import { EMPTY_INSIGHT, type KeywordGroupId } from "~/lib/types";
 import { authenticate } from "~/shopify.server";
 
@@ -66,7 +77,7 @@ async function getContext(request: Request) {
     devOverrideEnabled: process.env.ENABLE_DEV_PLAN_OVERRIDE === "true",
     isProduction: process.env.NODE_ENV === "production",
   });
-  return { shop, plan, admin };
+  return { shop, plan, admin, session };
 }
 
 function parseSaved(value?: string): GeneratedFaq[] {
@@ -93,6 +104,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     ]);
     const insight = parseRun(run) ?? EMPTY_INSIGHT;
     const provider = getAIProvider();
+    const aiEnabled = isAIEnabled();
     const stats = {
       total: generatedFaqs.length,
       generated: generatedFaqs.filter((faq) => !["prepared", "published"].includes(faq.status)).length,
@@ -108,6 +120,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       canGenerate: PLANS[plan].features.faqGeneration || plan === "free" || plan === "starter",
       aiProvider: provider.id,
       aiConfigured: provider.isConfigured(),
+      aiEnabled,
       storageReady: Boolean(faqModel),
     });
   } catch (error) {
@@ -123,6 +136,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       canGenerate: true,
       aiProvider: provider.id,
       aiConfigured: provider.isConfigured(),
+      aiEnabled: false,
       storageReady: false,
     });
   }
@@ -130,7 +144,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
 export async function action({ request }: ActionFunctionArgs) {
   try {
-    const { shop, plan, admin } = await getContext(request);
+    const { shop, plan, admin, session } = await getContext(request);
     const form = await request.formData();
     const intent = String(form.get("intent") ?? "generate");
     const groupId = String(form.get("groupId") ?? "shipping") as KeywordGroupId;
@@ -270,6 +284,73 @@ export async function action({ request }: ActionFunctionArgs) {
       return redirect("/app/faq");
     }
 
+    if (intent === "publish-page") {
+      const id = String(form.get("id") ?? "");
+      const rawType = String(form.get("contentType") ?? "faq_page");
+      const VALID_PAGE_TYPES: PageContentType[] = [
+        "faq_page", "shipping_page", "return_page", "warranty_page", "payment_page", "discount_page",
+      ];
+      const contentType = VALID_PAGE_TYPES.includes(rawType as PageContentType)
+        ? (rawType as PageContentType)
+        : "faq_page";
+      const faqModel = generatedFaqModel();
+      const faqRecord = faqModel && id
+        ? await faqModel.findMany({ where: { shopId: shop.id, id } }).then((rows) => rows[0] ?? null)
+        : null;
+      const faqs: FaqItem[] = faqRecord
+        ? [{ question: faqRecord.question, answer: faqRecord.answerText }]
+        : (DEFAULT_FAQS[PAGE_TYPE_GROUPS[contentType][0] ?? "shipping"] ?? []);
+      await publishFaqAsShopifyPage({ db: prisma, admin, shopId: shop.id, contentType, faqs, sourceId: id || undefined });
+      return redirect("/app/faq");
+    }
+
+    if (intent === "publish-blog") {
+      const id = String(form.get("id") ?? "");
+      const groupId = String(form.get("groupId") ?? "shipping");
+      const faqModel = generatedFaqModel();
+      const faqRecord = faqModel && id
+        ? await faqModel.findMany({ where: { shopId: shop.id, id } }).then((rows) => rows[0] ?? null)
+        : null;
+      const faqs: FaqItem[] = faqRecord
+        ? [{ question: faqRecord.question, answer: faqRecord.answerText }]
+        : (DEFAULT_FAQS[groupId] ?? []);
+      await publishFaqAsBlogArticle({ db: prisma, admin, shopId: shop.id, groupId, faqs, sourceId: id || undefined });
+      return redirect("/app/faq");
+    }
+
+    if (intent === "ai-generate") {
+      const faqModel = generatedFaqModel();
+      if (!faqModel) return redirect("/app/faq");
+      const rawType = String(form.get("contentType") ?? "faq");
+      const ALL_CONTENT_TYPES = Object.keys(CONTENT_TYPE_LABELS) as ContentType[];
+      const contentType = ALL_CONTENT_TYPES.includes(rawType as ContentType)
+        ? (rawType as ContentType)
+        : ("faq" as ContentType);
+      const generated = await generateContentWithFallback({
+        contentType,
+        groupId: String(form.get("groupId") ?? ""),
+        productTitle: String(form.get("productTitle") ?? "") || undefined,
+        productId: String(form.get("productId") ?? "") || undefined,
+        competitorName: String(form.get("competitorName") ?? "") || undefined,
+        shopDomain: session.shop,
+        storeName: session.shop.replace(".myshopify.com", ""),
+      });
+      await faqModel.create({
+        data: {
+          shopId: shop.id,
+          groupId: String(form.get("groupId") ?? contentType),
+          productId: String(form.get("productId") ?? "") || null,
+          productTitle: String(form.get("productTitle") ?? "") || null,
+          question: generated.title,
+          answerText: generated.plainText.slice(0, 2000),
+          answerHtml: generated.html,
+          source: generated.source,
+          status: "generated",
+        },
+      });
+      return redirect("/app/faq");
+    }
+
     if (!PLANS[plan].features.faqGeneration && plan !== "free" && plan !== "starter") {
       return json({ error: "FAQ generation is available on Growth and Pro." }, { status: 403 });
     }
@@ -318,6 +399,7 @@ export default function FaqGenerator() {
     stats,
     aiProvider,
     aiConfigured,
+    aiEnabled,
     storageReady,
   } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
@@ -519,14 +601,24 @@ export default function FaqGenerator() {
                         </Box>
                       </Box>
 
-                      <TextField
-                        label="Answer (editable draft)"
-                        labelHidden
-                        value={generated.answer}
-                        multiline={4}
-                        autoComplete="off"
-                        readOnly
-                      />
+                      <div style={{ background: "#f9f9f9", borderRadius: 6, padding: "8px 12px" }}>
+                        <textarea
+                          readOnly
+                          rows={4}
+                          value={generated.answer}
+                          aria-label="Answer preview"
+                          style={{
+                            width: "100%",
+                            border: "none",
+                            background: "transparent",
+                            resize: "none",
+                            fontFamily: "inherit",
+                            fontSize: 14,
+                            color: "#444",
+                            outline: "none",
+                          }}
+                        />
+                      </div>
 
                       <Divider />
 
@@ -539,7 +631,16 @@ export default function FaqGenerator() {
                             Create Content
                           </Button>
                         </Form>
-                        <Button disabled>Edit</Button>
+                        {aiEnabled ? (
+                          <Form method="post">
+                            <input type="hidden" name="intent" value="ai-generate" />
+                            <input type="hidden" name="contentType" value={`${item.groupId}_faq`} />
+                            <input type="hidden" name="groupId" value={item.groupId} />
+                            <Button submit variant="secondary">
+                              AI Generate
+                            </Button>
+                          </Form>
+                        ) : null}
                         <Form method="post">
                           <input type="hidden" name="intent" value="download" />
                           <input type="hidden" name="groupId" value={item.groupId} />
@@ -604,6 +705,18 @@ export default function FaqGenerator() {
                             <input type="hidden" name="id" value={faq.id} />
                             <input type="hidden" name="publishTarget" value="append_description" />
                             <Button submit size="slim">Append description</Button>
+                          </Form>
+                          <Form method="post">
+                            <input type="hidden" name="intent" value="publish-page" />
+                            <input type="hidden" name="id" value={faq.id} />
+                            <input type="hidden" name="contentType" value="faq_page" />
+                            <Button submit size="slim">Publish FAQ Page</Button>
+                          </Form>
+                          <Form method="post">
+                            <input type="hidden" name="intent" value="publish-blog" />
+                            <input type="hidden" name="id" value={faq.id} />
+                            <input type="hidden" name="groupId" value={faq.groupId ?? "shipping"} />
+                            <Button submit size="slim">Publish Blog Article</Button>
                           </Form>
                         </>
                       ) : null}

@@ -1,133 +1,204 @@
-import type { LoaderFunctionArgs } from "@remix-run/node";
-import { json } from "@remix-run/node";
-import { Badge, Banner, BlockStack, Button, InlineStack, Text } from "@shopify/polaris";
-import { useLoaderData, useNavigation } from "@remix-run/react";
+import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
+import { json, redirect } from "@remix-run/node";
+import {
+  Badge,
+  Banner,
+  BlockStack,
+  Button,
+  Card,
+  Divider,
+  InlineGrid,
+  InlineStack,
+  Text,
+} from "@shopify/polaris";
+import { Form, useActionData, useLoaderData, useNavigation } from "@remix-run/react";
 
 import prisma from "~/db.server";
+import { generateContentWithFallback, isAIEnabled } from "~/lib/ai";
 import { ensureShop, getLatestRun, parseRun } from "~/lib/shop.server";
 import { EMPTY_INSIGHT } from "~/lib/types";
-import type { CompetitorMentionResult, CompetitorThreat, ProductConfusionResult, TrendPoint } from "~/lib/types";
+import type { CompetitorMentionResult } from "~/lib/types";
 import { authenticate } from "~/shopify.server";
 import {
   AppPage,
   BarChart,
   ChartCard,
-  CompetitorCard,
   EmptyStateCard,
   KpiCard,
   ListSkeleton,
-  PriorityBadge,
   SectionHeader,
-  TrendChart,
-  type BarDatum,
   formatNumber,
+  type BarDatum,
 } from "~/components";
+import {
+  buildAllCompetitorIntelligence,
+  INTENT_LABELS,
+  type CompetitorIntelligence,
+} from "~/lib/engine/competitor-intelligence";
+import {
+  publishFaqAsBlogArticle,
+} from "~/lib/publish/shopify-publisher.server";
+
+async function getCtx(request: Request) {
+  const { session, admin } = await authenticate.admin(request);
+  const shop = await ensureShop(prisma, session.shop);
+  return { shop, session, admin };
+}
 
 export async function loader({ request }: LoaderFunctionArgs) {
   try {
-    const { session } = await authenticate.admin(request);
-    const shop = await ensureShop(prisma, session.shop);
+    const { shop } = await getCtx(request);
     const url = new URL(request.url);
     const debugMode = process.env.NODE_ENV !== "production" ? url.searchParams.get("debug") : null;
     const insight = parseRun(await getLatestRun(prisma, shop.id)) ?? EMPTY_INSIGHT;
-
-    // Only include products as "affected by competitors" when a customer message
-    // BOTH named a competitor brand AND mentioned a specific product. Generic
-    // "compare" language ("vs", "which is better") without a real competitor
-    // brand mention does NOT create competitor-affected products.
-    const hasCompetitorMentions = insight.competitors.length > 0;
-    const comparedProducts = hasCompetitorMentions
-      ? insight.productConfusion.filter((product) =>
-          product.topGroups.some((group) => group === "competitor" || group === "compare"),
-        )
-      : [];
-
-    // Comparison-signal products: products with compare/competitor topics but
-    // no real brand mentions. Used only for the informational banner.
-    const comparisonSignalProducts = !hasCompetitorMentions
-      ? insight.productConfusion.filter((product) =>
-          product.topGroups.some((group) => group === "competitor" || group === "compare"),
-        )
-      : [];
-
-    // Competitor debug info (dev only)
-    const competitorsDebug = debugMode === "competitors"
-      ? {
-          detectedBrandMentions: insight.competitors.map((c) => ({ name: c.name, count: c.count })),
-          affectedProducts: comparedProducts.map((p) => ({ title: p.productTitle, score: p.confusionScore })),
-          comparisonSignalProducts: comparisonSignalProducts.map((p) => ({ title: p.productTitle })),
-          totalMentions: insight.competitors.reduce((sum, c) => sum + c.count, 0),
-          threatScoreFormula: "totalMentions * 6 + competitors.length * 8 + comparedProducts.length * 6 (capped at 100, 0 when no brand mentions)",
-          note: "Configure competitor brand names in Settings to detect specific rivals.",
-        }
-      : null;
+    const intelligence = buildAllCompetitorIntelligence(insight.competitors);
+    const totalRevenue = intelligence.reduce((sum, c) => sum + c.revenueAtRisk, 0);
+    const totalSwitching = intelligence.filter((c) => c.switchingRisk > 40).length;
 
     return json({
+      intelligence,
       competitors: insight.competitors,
-      competitorThreats: insight.competitorThreats,
-      comparedProducts,
-      comparisonSignalProducts,
-      trend: insight.weeklyTrend,
-      competitorsDebug,
+      comparedProducts: insight.productConfusion.filter((p) =>
+        p.topGroups.some((g) => g === "competitor" || g === "compare"),
+      ),
+      totalRevenue,
+      totalSwitching,
+      aiEnabled: isAIEnabled(),
+      shopDomain: shop.shopDomain,
+      debugInfo: debugMode === "competitors" ? { count: insight.competitors.length } : null,
       loadError: null,
     });
   } catch (error) {
     console.error("Competitors loader failed", error);
     return json({
-      competitors: [],
-      competitorThreats: [],
+      intelligence: [] as CompetitorIntelligence[],
+      competitors: [] as CompetitorMentionResult[],
       comparedProducts: [],
-      comparisonSignalProducts: [],
-      trend: [],
-      competitorsDebug: null,
-      loadError: "Some data could not be loaded. Your store data is safe. Try refreshing or run analysis again.",
+      totalRevenue: 0,
+      totalSwitching: 0,
+      aiEnabled: false,
+      shopDomain: "",
+      debugInfo: null,
+      loadError: "Data could not be loaded. Try refreshing or run analysis again.",
     });
   }
 }
 
-export default function Competitors() {
-  const data = useLoaderData<typeof loader>();
-  const competitors = data.competitors as CompetitorMentionResult[];
-  const competitorThreats = data.competitorThreats as CompetitorThreat[];
-  const comparedProducts = data.comparedProducts as ProductConfusionResult[];
-  const comparisonSignalProducts = (data.comparisonSignalProducts ?? []) as ProductConfusionResult[];
-  const trend = data.trend as TrendPoint[];
-  const competitorsDebug = data.competitorsDebug;
+export async function action({ request }: ActionFunctionArgs) {
+  try {
+    const { shop, session, admin } = await getCtx(request);
+    const form = await request.formData();
+    const intent = String(form.get("intent") ?? "");
+    const competitorName = String(form.get("competitorName") ?? "competitor");
+
+    const saveFaqDraft = async (content: { title: string; plainText: string; html: string; source: string }) => {
+      const faqModel = (prisma as unknown as {
+        generatedFaq?: { create: (args: unknown) => Promise<unknown> };
+      }).generatedFaq;
+      if (faqModel?.create) {
+        await faqModel.create({
+          data: {
+            shopId: shop.id,
+            groupId: "competitor",
+            question: content.title,
+            answerText: content.plainText.slice(0, 2000),
+            answerHtml: content.html,
+            source: content.source,
+            status: "generated",
+          },
+        });
+      }
+    };
+
+    if (intent === "generate-comparison") {
+      const content = await generateContentWithFallback({
+        contentType: "competitor_comparison",
+        competitorName,
+        shopDomain: session.shop,
+        storeName: session.shop.replace(".myshopify.com", ""),
+      });
+      await saveFaqDraft(content);
+      return redirect("/app/faq");
+    }
+
+    if (intent === "generate-why-us") {
+      const content = await generateContentWithFallback({
+        contentType: "why_buy_from_us",
+        competitorName,
+        shopDomain: session.shop,
+        storeName: session.shop.replace(".myshopify.com", ""),
+      });
+      await saveFaqDraft(content);
+      return redirect("/app/faq");
+    }
+
+    if (intent === "publish-competitor-blog") {
+      await publishFaqAsBlogArticle({
+        db: prisma,
+        admin,
+        shopId: shop.id,
+        groupId: "competitor",
+        faqs: [
+          {
+            question: `Why do customers compare you to ${competitorName}?`,
+            answer: `Customers evaluating ${competitorName} look at quality, pricing, policies, and support. Here's how we address each concern.`,
+          },
+          {
+            question: `How do you compare to ${competitorName}?`,
+            answer: `We focus on transparent policies, fast fulfillment, and product quality. Review product pages and policies to compare directly.`,
+          },
+        ],
+        blogTitle: "Customer Insights",
+      });
+      return redirect("/app/publish");
+    }
+
+    return redirect("/app/competitors");
+  } catch (error) {
+    if (error instanceof Response) throw error;
+    console.error("Competitors action failed", error);
+    return json({ error: error instanceof Error ? error.message : "Action failed." }, { status: 500 });
+  }
+}
+
+const INTENT_BADGE: Record<string, "critical" | "warning" | "info" | "success"> = {
+  switching: "critical",
+  price: "warning",
+  feature: "info",
+  trust: "warning",
+  comparison: "info",
+  general: "info",
+};
+
+export default function CompetitorsPage() {
+  const { intelligence, competitors, comparedProducts, totalRevenue, totalSwitching, aiEnabled, debugInfo, loadError } =
+    useLoaderData<typeof loader>();
+  const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
+
   if (navigation.state === "loading") return <ListSkeleton />;
 
-  // Empty when no competitor brands detected in any message.
-  // Generic comparison language ("vs", "compare") without a brand name does
-  // not qualify as a competitor threat.
   const isEmpty = competitors.length === 0;
+  const totalMentions = competitors.reduce((sum, c) => sum + c.count, 0);
+
+  const bars: BarDatum[] = intelligence.map((c) => ({
+    label: c.name,
+    value: c.totalMentions,
+    tone: c.switchingRisk >= 60 ? "critical" : c.switchingRisk >= 30 ? "warning" : "info",
+  }));
 
   if (isEmpty) {
     return (
       <AppPage
-        title="Competitive Revenue Threats"
-        subtitle="Find competitors costing buyer confidence and create response content."
+        title="Competitor Intelligence"
+        subtitle="Find competitors costing you buyers and generate response content."
         primaryAction={<Button url="/app/import" variant="primary">Add customer questions</Button>}
         secondaryAction={<Button url="/app/settings">Configure tracking</Button>}
       >
-        {competitorsDebug ? (
-          <div className="cia-section-band">
-            <BlockStack gap="150">
-              <SectionHeader title="Debug: Competitor Detection" description="Development-only. Accessible via ?debug=competitors" />
-              <Text as="p" variant="bodySm"><strong>Brand mentions detected:</strong> {competitorsDebug.detectedBrandMentions.length}</Text>
-              <Text as="p" variant="bodySm"><strong>Comparison-signal products (generic, no brand):</strong> {competitorsDebug.comparisonSignalProducts.length}</Text>
-              <Text as="p" variant="bodySm"><strong>Threat score formula:</strong> {competitorsDebug.threatScoreFormula}</Text>
-              <Text as="p" variant="bodySm"><strong>Note:</strong> {competitorsDebug.note}</Text>
-            </BlockStack>
-          </div>
-        ) : null}
-        {comparisonSignalProducts.length > 0 ? (
-          <Banner tone="info" title="Comparison questions detected">
-            <p>{`${comparisonSignalProducts.length} product(s) have comparison questions but no competitor brand names were identified. Add competitor terms in Settings to track specific rivals.`}</p>
-          </Banner>
-        ) : null}
+        {loadError ? <Banner tone="critical" title="Load error"><p>{loadError}</p></Banner> : null}
         <EmptyStateCard
           title="No competitor mentions detected"
-          body="Competitor brand names were not found in the analyzed customer questions. Configure competitor terms in Settings or import conversations that mention specific rivals."
+          body="Add competitor brand names in Settings and import conversations that mention rivals."
           actionLabel="Configure competitor tracking"
           actionUrl="/app/settings"
         />
@@ -135,149 +206,202 @@ export default function Competitors() {
     );
   }
 
-  // Presentational derivations — only when real competitor brand mentions exist.
-  const totalMentions = competitors.reduce((sum, item) => sum + item.count, 0);
-
-  // Competitive-pressure score: meaningful only when there are real brand mentions.
-  const pressureScore = totalMentions === 0
-    ? 0
-    : Math.min(100, Math.round(totalMentions * 6 + competitors.length * 8 + comparedProducts.length * 6));
-
-  // 7-day mention trend from the real analysis timeline.
-  const window7 = trend.slice(-7).reduce((sum, p) => sum + p.count, 0);
-  const prior7 = trend.slice(-14, -7).reduce((sum, p) => sum + p.count, 0);
-  const trend7 = prior7 > 0 ? (window7 - prior7) / prior7 : window7 > 0 ? 1 : 0;
-
-  const sortedCompetitors = [...competitors].sort((a, b) => b.count - a.count);
-
-  const competitorBars: BarDatum[] = sortedCompetitors.map((item) => ({
-    label: item.name,
-    value: item.count,
-    tone: item.count >= 3 ? "critical" : item.count >= 2 ? "warning" : "info",
-  }));
-
-  const productBars: BarDatum[] = [...comparedProducts]
-    .sort((a, b) => b.mentionCount - a.mentionCount)
-    .map((product) => ({
-      label: product.productTitle,
-      value: product.mentionCount,
-      tone: product.confusionScore >= 50 ? "critical" : "warning",
-    }));
-
   return (
     <AppPage
-      title="Competitive Revenue Threats"
-      subtitle="Competitors customers mention before leaving your store."
-      primaryAction={<Button url="/app/faq" variant="primary">Generate Comparison FAQ</Button>}
+      title="Competitor Intelligence"
+      subtitle="Revenue at risk from competitor pressure — and how to recover it."
+      primaryAction={<Button url="/app/faq" variant="primary">Generate Response Content</Button>}
       secondaryAction={<Button url="/app/settings">Configure tracking</Button>}
     >
       <BlockStack gap="500">
-        {competitorsDebug ? (
-          <div className="cia-section-band">
-            <BlockStack gap="150">
-              <SectionHeader title="Debug: Competitor Detection" description="Development-only. Accessible via ?debug=competitors" />
-              <Text as="p" variant="bodySm"><strong>Brand mentions detected:</strong> {competitorsDebug.detectedBrandMentions.length}</Text>
-              <Text as="p" variant="bodySm"><strong>Total brand mentions:</strong> {competitorsDebug.totalMentions}</Text>
-              <Text as="p" variant="bodySm"><strong>Affected products (via brand+product signal):</strong> {competitorsDebug.affectedProducts.length}</Text>
-              <Text as="p" variant="bodySm"><strong>Comparison-signal (no brand name):</strong> {competitorsDebug.comparisonSignalProducts.length}</Text>
-              <Text as="p" variant="bodySm"><strong>Pressure score formula:</strong> {competitorsDebug.threatScoreFormula}</Text>
-            </BlockStack>
-          </div>
+        {loadError ? <Banner tone="critical" title="Load error"><p>{loadError}</p></Banner> : null}
+        {actionData && "error" in actionData ? (
+          <Banner tone="critical" title="Action failed"><p>{actionData.error}</p></Banner>
         ) : null}
-        <div className="cia-three-grid">
-          <KpiCard
-            label="Threat score"
-            value={`${pressureScore}/100`}
-            detail="Mention volume and affected products"
-            tone={pressureScore >= 50 ? "warning" : "info"}
-          />
-          <KpiCard
-            label="Customer concerns"
-            value={formatNumber(totalMentions)}
-            detail={`${formatNumber(competitors.length)} rivals detected`}
-            tone="info"
-          />
-          <KpiCard
-            label="Products affected"
-            value={formatNumber(comparedProducts.length)}
-            detail="Products weighed against alternatives"
-            tone={comparedProducts.length > 0 ? "warning" : "info"}
-          />
+        {debugInfo ? (
+          <Card>
+            <Text as="p" variant="bodySm">{`Debug: ${debugInfo.count} competitor(s) detected in analysis`}</Text>
+          </Card>
+        ) : null}
+
+        <div className="cia-metric-strip">
+          <div className="cia-muted-panel">
+            <div className="cia-eyebrow">Competitors Tracked</div>
+            <Text as="p" variant="headingLg">{formatNumber(intelligence.length)}</Text>
+          </div>
+          <div className="cia-muted-panel">
+            <div className="cia-eyebrow">Total Mentions</div>
+            <Text as="p" variant="headingLg">{formatNumber(totalMentions)}</Text>
+          </div>
+          <div className="cia-muted-panel">
+            <div className="cia-eyebrow">Revenue at Risk</div>
+            <Text as="p" variant="headingLg">{`$${formatNumber(totalRevenue)}/mo`}</Text>
+          </div>
+          <div className="cia-muted-panel">
+            <div className="cia-eyebrow">High Switching Risk</div>
+            <Text as="p" variant="headingLg">{formatNumber(totalSwitching)}</Text>
+          </div>
         </div>
 
-        <div className="cia-two-grid">
-          <ChartCard title="Threat trend" subtitle="Daily competitor concerns across the analysis window">
-            <TrendChart points={trend} tone={pressureScore >= 50 ? "warning" : "info"} height={72} />
-          </ChartCard>
-          <ChartCard title="Competitor pressure" subtitle="Where comparison pressure is strongest">
-            <BarChart data={competitorBars} tone="info" limit={10} />
-          </ChartCard>
-        </div>
-
-        {productBars.length > 0 ? (
-          <ChartCard title="Products affected" subtitle="Where comparison shopping is hitting hardest">
-            <BarChart data={productBars} tone="warning" limit={8} />
+        {bars.length > 0 ? (
+          <ChartCard title="Competitor pressure" subtitle="Mention volume per competitor brand">
+            <BarChart data={bars} tone="info" limit={10} />
           </ChartCard>
         ) : null}
 
         <BlockStack gap="300">
           <SectionHeader
-            title="Competitive Revenue Threat Cards"
-            description="Each competitor includes threat score, affected products, customer concerns, suggested response, recommended content, and FAQ opportunity."
+            title="Competitor Intelligence Cards"
+            description="Revenue at risk, switching intent, price risk, and recovery opportunities per competitor."
           />
-          <div className="cia-two-grid">
-            {sortedCompetitors.map((item) => {
-              const threat = competitorThreats.find((entry) => entry.name === item.name);
-              const affectedProducts = comparedProducts
-                .filter((product) => product.exampleQuote?.toLowerCase().includes(item.name.toLowerCase()))
-                .map((product) => product.productTitle);
+          <InlineGrid columns={{ xs: 1, md: 2 }} gap="400">
+            {intelligence.map((item) => {
+              const topIntents = Object.entries(item.intentBreakdown)
+                .filter(([, c]) => c > 0)
+                .sort(([, a], [, b]) => b - a)
+                .slice(0, 3);
+
               return (
-                <CompetitorCard
-                  key={item.name}
-                  name={item.name}
-                  mentions={item.count}
-                  reasons={threat?.reasons ?? ["Comparison shopping"]}
-                  quote={item.exampleQuote}
-                  recommendation={
-                    threat?.recommendation ??
-                    "Add comparison copy that explains why shoppers should choose this store."
-                  }
-                  affectedProducts={affectedProducts}
-                />
+                <Card key={item.name}>
+                  <BlockStack gap="300">
+                    <InlineStack align="space-between" blockAlign="start" wrap={false} gap="200">
+                      <BlockStack gap="050">
+                        <Text as="h3" variant="headingMd">{item.name}</Text>
+                        {item.topQuote ? (
+                          <Text as="p" variant="bodySm" tone="subdued">
+                            {`"${item.topQuote.slice(0, 80)}${item.topQuote.length > 80 ? "..." : ""}"`}
+                          </Text>
+                        ) : null}
+                      </BlockStack>
+                      <BlockStack gap="100">
+                        {item.switchingRisk >= 50 ? <Badge tone="critical">High switching risk</Badge> : null}
+                        {item.growthRate > 0 ? <Badge tone="warning">{`+${item.growthRate}% trend`}</Badge> : null}
+                      </BlockStack>
+                    </InlineStack>
+
+                    <InlineGrid columns={{ xs: 2, sm: 4 }} gap="200">
+                      <BlockStack gap="050">
+                        <Text as="span" variant="bodySm" tone="subdued">Mentions</Text>
+                        <Text as="span" variant="headingSm">{formatNumber(item.totalMentions)}</Text>
+                      </BlockStack>
+                      <BlockStack gap="050">
+                        <Text as="span" variant="bodySm" tone="subdued">Revenue at risk</Text>
+                        <Text as="span" variant="headingSm">{`$${formatNumber(item.revenueAtRisk)}/mo`}</Text>
+                      </BlockStack>
+                      <BlockStack gap="050">
+                        <Text as="span" variant="bodySm" tone="subdued">Switching risk</Text>
+                        <Text as="span" variant="headingSm">{`${item.switchingRisk}/100`}</Text>
+                      </BlockStack>
+                      <BlockStack gap="050">
+                        <Text as="span" variant="bodySm" tone="subdued">Price risk</Text>
+                        <Text as="span" variant="headingSm">{`${item.priceRisk}/100`}</Text>
+                      </BlockStack>
+                    </InlineGrid>
+
+                    {topIntents.length > 0 ? (
+                      <InlineStack gap="200" blockAlign="center">
+                        <Text as="span" variant="bodySm" tone="subdued">Intent:</Text>
+                        {topIntents.map(([key]) => (
+                          <Badge key={key} tone={INTENT_BADGE[key] ?? "info"}>
+                            {INTENT_LABELS[key as keyof typeof INTENT_LABELS] ?? key}
+                          </Badge>
+                        ))}
+                      </InlineStack>
+                    ) : null}
+
+                    <Divider />
+
+                    <BlockStack gap="150">
+                      <Text as="h4" variant="headingSm">Recovery opportunities</Text>
+                      {item.opportunities.slice(0, 2).map((opp) => (
+                        <BlockStack key={opp.type} gap="050">
+                          <InlineStack align="space-between" blockAlign="center" wrap={false} gap="200">
+                            <Text as="p" variant="bodyMd" fontWeight="semibold">{opp.label}</Text>
+                            <Badge tone={opp.priority === "high" ? "critical" : opp.priority === "medium" ? "warning" : "info"}>
+                              {opp.priority}
+                            </Badge>
+                          </InlineStack>
+                          <Text as="p" variant="bodySm" tone="subdued">{opp.description}</Text>
+                          <Text as="p" variant="bodySm">{`Est. recovery: $${formatNumber(opp.estimatedRevenue)}/mo`}</Text>
+                        </BlockStack>
+                      ))}
+                    </BlockStack>
+
+                    <Divider />
+
+                    <InlineStack gap="200" wrap>
+                      <Form method="post">
+                        <input type="hidden" name="intent" value="generate-comparison" />
+                        <input type="hidden" name="competitorName" value={item.name} />
+                        <Button submit size="slim" variant="primary">
+                          {aiEnabled ? "AI Comparison Content" : "Generate Comparison Content"}
+                        </Button>
+                      </Form>
+                      <Form method="post">
+                        <input type="hidden" name="intent" value="generate-why-us" />
+                        <input type="hidden" name="competitorName" value={item.name} />
+                        <Button submit size="slim">Why Buy From Us</Button>
+                      </Form>
+                      <Form method="post">
+                        <input type="hidden" name="intent" value="publish-competitor-blog" />
+                        <input type="hidden" name="competitorName" value={item.name} />
+                        <Button submit size="slim">Publish Blog</Button>
+                      </Form>
+                    </InlineStack>
+                  </BlockStack>
+                </Card>
               );
             })}
-          </div>
+          </InlineGrid>
         </BlockStack>
 
         {comparedProducts.length > 0 ? (
-          <ChartCard title="Compared against alternatives" subtitle="Products customers explicitly stack up against rivals">
-            <BlockStack gap="300">
-              {[...comparedProducts]
-                .sort((a, b) => b.mentionCount - a.mentionCount)
-                .map((product) => (
-                  <InlineStack
-                    key={product.productId ?? product.productTitle}
-                    align="space-between"
-                    blockAlign="center"
-                    wrap={false}
-                  >
-                    <BlockStack gap="050">
-                      <Text as="span" variant="bodyMd" fontWeight="semibold">
-                        {product.productTitle}
-                      </Text>
-                      <Text as="span" variant="bodySm" tone="subdued">
-                        {`${formatNumber(product.mentionCount)} mentions`}
-                      </Text>
-                    </BlockStack>
-                    <PriorityBadge
-                      level={product.confusionScore >= 50 ? "high" : product.confusionScore >= 25 ? "medium" : "low"}
-                      withLabel
-                    />
-                  </InlineStack>
+          <BlockStack gap="300">
+            <SectionHeader
+              title="Products Under Competitive Pressure"
+              description="Products customers explicitly compare against alternatives."
+            />
+            <Card>
+              <BlockStack gap="200">
+                {comparedProducts.filter(Boolean).map((product, index) => (
+                  <BlockStack key={`${product?.productId ?? product?.productTitle ?? index}`} gap="100">
+                    {index > 0 ? <Divider /> : null}
+                    <InlineStack align="space-between" blockAlign="center" wrap={false}>
+                      <BlockStack gap="050">
+                        <Text as="p" variant="bodyMd" fontWeight="semibold">{product?.productTitle ?? "Product"}</Text>
+                        <Text as="p" variant="bodySm" tone="subdued">
+                          {`${formatNumber(product?.mentionCount ?? 0)} mentions · confusion score ${Math.round(product?.confusionScore ?? 0)}/100`}
+                        </Text>
+                      </BlockStack>
+                      <Button url="/app/faq" size="slim">Generate Fix</Button>
+                    </InlineStack>
+                  </BlockStack>
                 ))}
-            </BlockStack>
-          </ChartCard>
+              </BlockStack>
+            </Card>
+          </BlockStack>
         ) : null}
+
+        <div className="cia-three-grid">
+          <KpiCard
+            label="Highest switching risk"
+            value={intelligence[0]?.name ?? "None"}
+            detail={`${intelligence[0]?.switchingRisk ?? 0}/100 switching risk`}
+            tone={intelligence[0]?.switchingRisk >= 50 ? "warning" : "info"}
+          />
+          <KpiCard
+            label="Most revenue at risk"
+            value={intelligence[0] ? `$${formatNumber(intelligence[0].revenueAtRisk)}/mo` : "$0/mo"}
+            detail={`From ${intelligence[0]?.name ?? "competitors"}`}
+            tone="warning"
+          />
+          <KpiCard
+            label="Total recovery potential"
+            value={`$${formatNumber(totalRevenue)}/mo`}
+            detail="If all competitor objections are addressed"
+            tone="success"
+          />
+        </div>
       </BlockStack>
     </AppPage>
   );

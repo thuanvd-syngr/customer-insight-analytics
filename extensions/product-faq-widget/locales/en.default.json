@@ -1,0 +1,30 @@
+{
+  "blocks": {
+    "product_faq": {
+      "name": "Product FAQ"
+    }
+  },
+  "settings": {
+    "heading": {
+      "label": "Heading"
+    },
+    "accordion": {
+      "label": "Use accordion style"
+    },
+    "max_faqs": {
+      "label": "Max FAQs shown"
+    },
+    "show_shipping": {
+      "label": "Include shipping FAQs"
+    },
+    "show_return": {
+      "label": "Include return FAQs"
+    },
+    "show_warranty": {
+      "label": "Include warranty FAQs"
+    },
+    "show_payment": {
+      "label": "Include payment FAQs"
+    }
+  }
+}

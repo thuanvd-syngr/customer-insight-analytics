@@ -55,6 +55,11 @@ model Shop {
   shopifyCustomers ShopifyCustomer[]
   generatedFaqs    GeneratedFaq[]
   weeklyEmails     WeeklyEmail[]
+  publishedContents    PublishedContent[]
+  competitors          Competitor[]
+  bulkJobs             BulkJob[]
+  emailReportLogs      EmailReportLog[]
+  productOptDrafts     ProductOptimizationDraft[]
 
   @@index([shopDomain])
 }
@@ -293,6 +298,166 @@ model GeneratedFaq {
 
   @@index([shopId, status])
   @@index([shopId, productId])
+}
+
+/// Merchant-configured competitor brands tracked across analysis runs.
+/// intentTypes tracked: comparison | switching | price | feature | trust | general
+model Competitor {
+  id        String   @id @default(cuid())
+  shopId    String
+  shop      Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  name      String
+  domain    String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  mentions      CompetitorMention[]
+  opportunities CompetitorOpportunity[]
+
+  @@unique([shopId, name])
+  @@index([shopId])
+}
+
+/// Individual competitor mention classified by intent from an imported message.
+model CompetitorMention {
+  id           String     @id @default(cuid())
+  shopId       String
+  competitorId String
+  competitor   Competitor @relation(fields: [competitorId], references: [id], onDelete: Cascade)
+  messageId    String?
+  intentType   String     @default("general") // comparison | switching | price | feature | trust | general
+  quote        String?
+  occurredAt   DateTime
+  createdAt    DateTime   @default(now())
+
+  @@index([shopId, competitorId])
+  @@index([shopId, occurredAt])
+}
+
+/// Aggregated revenue opportunity derived from competitor mentions.
+model CompetitorOpportunity {
+  id                String     @id @default(cuid())
+  shopId            String
+  competitorId      String
+  competitor        Competitor @relation(fields: [competitorId], references: [id], onDelete: Cascade)
+  opportunityType   String     // comparison_content | why_us_page | competitor_landing | price_objection
+  estimatedRevenue  Float      @default(0)
+  affectedCustomers Int        @default(0)
+  mentionCount      Int        @default(0)
+  growthRate        Float      @default(0)
+  status            String     @default("open") // open | actioned | dismissed
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
+
+  @@index([shopId, competitorId])
+  @@index([shopId, status])
+}
+
+/// Tracks every page, blog article, or other asset published to Shopify by this app.
+/// contentType: faq_page | shipping_page | return_page | warranty_page | payment_page | discount_page | blog_article
+/// status: published | failed | deleted
+model PublishedContent {
+  id            String    @id @default(cuid())
+  shopId        String
+  shop          Shop      @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  contentType   String
+  resourceId    String?   // Shopify GID returned after creation
+  resourceTitle String
+  sourceId      String?   // GeneratedFaq.id when re-publishing a saved FAQ
+  status        String    @default("published")
+  error         String?
+  publishedAt   DateTime  @default(now())
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([shopId, contentType])
+  @@index([shopId, publishedAt])
+}
+
+/// Bulk processing job: generate, publish, export, or ignore a batch of opportunities.
+/// status: queued | running | completed | failed
+model BulkJob {
+  id             String        @id @default(cuid())
+  shopId         String
+  shop           Shop          @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  jobType        String        // generate | publish_pages | publish_blogs | publish_product_faqs | export | ignore
+  status         String        @default("queued")
+  filterType     String?       // storewide | product | competitor | high_impact | not_published
+  totalItems     Int           @default(0)
+  processedItems Int           @default(0)
+  failedItems    Int           @default(0)
+  resultJson     String?
+  error          String?
+  startedAt      DateTime?
+  completedAt    DateTime?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  items BulkJobItem[]
+
+  @@index([shopId, status])
+  @@index([shopId, createdAt])
+}
+
+/// Individual item within a BulkJob. Supports per-item retry.
+model BulkJobItem {
+  id         String   @id @default(cuid())
+  jobId      String
+  job        BulkJob  @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  itemId     String
+  itemType   String   // opportunity | faq | product
+  status     String   @default("queued") // queued | running | completed | failed
+  retryCount Int      @default(0)
+  result     String?
+  error      String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([jobId, status])
+}
+
+/// Log of every email report attempt: weekly, monthly, alerts, and test sends.
+/// Delivery is provider-agnostic; mock provider logs here without actual sending.
+model EmailReportLog {
+  id             String    @id @default(cuid())
+  shopId         String
+  shop           Shop      @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  reportType     String    // weekly | monthly | quarterly | alert_competitor | alert_high_impact | test
+  subject        String
+  recipientEmail String
+  status         String    @default("pending") // pending | sent | failed | skipped
+  provider       String    @default("mock")    // mock | sendgrid | postmark | resend
+  error          String?
+  sentAt         DateTime?
+  createdAt      DateTime  @default(now())
+
+  @@index([shopId, createdAt])
+  @@index([shopId, reportType])
+}
+
+/// AI or rule-based optimisation draft for one section of a Shopify product.
+/// sectionType: description | seo_title | meta_description | benefits |
+///   objection_handling | comparison | trust | warranty | shipping | return
+model ProductOptimizationDraft {
+  id              String    @id @default(cuid())
+  shopId          String
+  shop            Shop      @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  productId       String
+  productTitle    String
+  sectionType     String
+  originalContent String?
+  draftContent    String
+  draftHtml       String
+  source          String    @default("rule") // rule | ai
+  status          String    @default("draft") // draft | published | rolled_back
+  publishedAt     DateTime?
+  rolledBackAt    DateTime?
+  error           String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([shopId, productId])
+  @@index([shopId, status])
 }
 
 /// Stored weekly recovery email HTML. Provider delivery is intentionally out of scope.

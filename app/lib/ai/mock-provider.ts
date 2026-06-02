@@ -1,4 +1,5 @@
-import type { AIProvider, WeeklySummaryInput } from "./types";
+import type { AIProvider, ContentGenerationInput, GeneratedContent, WeeklySummaryInput } from "./types";
+import { buildRuleBasedContent } from "./content-generator";
 import { buildMockSummary } from "./summary";
 
 export class MockProvider implements AIProvider {
@@ -11,5 +12,10 @@ export class MockProvider implements AIProvider {
 
   async generateWeeklySummary(input: WeeklySummaryInput): Promise<string> {
     return buildMockSummary(input);
+  }
+
+  // Mock uses rule-based content so tests work without real AI credentials.
+  async generateContent(input: ContentGenerationInput): Promise<GeneratedContent> {
+    return buildRuleBasedContent(input);
   }
 }
