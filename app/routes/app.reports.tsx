@@ -251,12 +251,24 @@ export default function Reports() {
     display: `${formatNumber(p.mentionCount)} mentions`,
     tone: p.confusionScore >= 67 ? "critical" : p.confusionScore >= 34 ? "warning" : "info",
   }));
+  const productGapBars: BarDatum[] = (insight?.contentGaps ?? []).slice(0, 6).map((p) => ({
+    label: p.productTitle,
+    value: p.contentGapScore,
+    display: `${formatNumber(p.mentionCount)} matched questions`,
+    tone: p.contentGapScore >= 67 ? "critical" : p.contentGapScore >= 34 ? "warning" : "info",
+  }));
 
   const driverBars: BarDatum[] = (revenue?.drivers ?? []).slice(0, 6).map((d) => ({
     label: d.label,
     value: d.revenueImpact,
     display: money(d.revenueImpact),
     tone: "critical",
+  }));
+  const storewideBars: BarDatum[] = (insight?.storewideOpportunities ?? []).slice(0, 6).map((item) => ({
+    label: item.label,
+    value: item.mentionCount,
+    display: `${formatNumber(item.mentionCount)} mentions`,
+    tone: item.severity === "high" ? "critical" : item.severity === "medium" ? "warning" : "info",
   }));
 
   return (
@@ -352,15 +364,31 @@ export default function Reports() {
 
             <BlockStack gap="300">
               <SectionHeader
-                title="Top Products"
-                description="Products generating the most customer confusion"
+                title="Storewide Opportunities"
+                description="General buying objections detected from imported questions"
               />
               <Card>
-                {productBars.length > 0 ? (
-                  <BarChart data={productBars} tone="info" />
+                {storewideBars.length > 0 ? (
+                  <BarChart data={storewideBars} tone="warning" />
                 ) : (
                   <Text as="p" variant="bodySm" tone="subdued">
-                    Sync product and order data and run analysis to identify products at risk.
+                    No storewide opportunities detected yet.
+                  </Text>
+                )}
+              </Card>
+            </BlockStack>
+
+            <BlockStack gap="300">
+              <SectionHeader
+                title="Product Opportunities"
+                description="Product-specific findings from matched customer questions"
+              />
+              <Card>
+                {productGapBars.length > 0 || productBars.length > 0 ? (
+                  <BarChart data={productGapBars.length > 0 ? productGapBars : productBars} tone="info" />
+                ) : (
+                  <Text as="p" variant="bodySm" tone="subdued">
+                    No product-specific opportunities yet. Storewide issues can still be actioned above.
                   </Text>
                 )}
               </Card>

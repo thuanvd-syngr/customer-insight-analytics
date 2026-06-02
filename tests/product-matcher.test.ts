@@ -135,6 +135,27 @@ describe("direct product title mention", () => {
     expect(confusion[0].mentionCount).toBe(2);
     expect(confusion[0].topGroups).toContain("size");
   });
+
+  it("matches product by handle, vendor, tags, and product type", () => {
+    const products = [
+      {
+        ...product("gid://shopify/Product/1", "CloudFit Hoodie", "Comfortable athletic hoodie", ["winterwear"], "Clothing"),
+        handle: "cloudfit-hoodie",
+        vendor: "North Peak",
+      },
+      product("gid://shopify/Product/2", "TrailRun Shoes", "Lightweight trail running shoes"),
+    ];
+    const messages = [
+      msg("Does north peak have a return policy?"),
+      msg("Is the cloudfit-hoodie available in XL size?"),
+      msg("Is your winterwear shipping fast?"),
+    ];
+    const confusion = detectProductConfusion(messages, products);
+    expect(confusion).toHaveLength(1);
+    expect(confusion[0].productTitle).toBe("CloudFit Hoodie");
+    expect(confusion[0].mentionCount).toBe(3);
+    expect(confusion[0].topGroups).toEqual(expect.arrayContaining(["return", "size", "shipping"]));
+  });
 });
 
 // ─── Part 6, test 4: tag/type match → inferred finding with medium confidence ──

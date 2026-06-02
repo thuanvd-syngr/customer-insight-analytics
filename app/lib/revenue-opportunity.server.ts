@@ -17,6 +17,7 @@ const GROUP_CONVERSION_LIFT: Partial<Record<KeywordGroupId, { low: number; high:
   refund: { low: 0.13, high: 0.34 },
   return: { low: 0.13, high: 0.34 },
   stock: { low: 0.12, high: 0.32 },
+  discount: { low: 0.1, high: 0.24 },
   size: { low: 0.12, high: 0.3 },
   compare: { low: 0.1, high: 0.28 },
   competitor: { low: 0.1, high: 0.3 },
@@ -35,6 +36,7 @@ const ACTIONS: Partial<Record<KeywordGroupId, string>> = {
   competitor: "Add Competitor Comparison Section",
   payment: "Clarify Payment Options",
   size: "Improve Size Guide",
+  discount: "Clarify Discount and Promo Code Policy",
   ingredient: "Expand Ingredient Details",
   usage: "Add Usage Instructions",
 };
@@ -43,6 +45,8 @@ const ACTION_TYPES: Partial<Record<KeywordGroupId, QuestionOpportunity["actionTy
   compare: "comparison",
   competitor: "comparison",
   payment: "faq",
+  delivery: "faq",
+  discount: "faq",
   return: "policy",
   refund: "policy",
   shipping: "faq",
@@ -158,7 +162,7 @@ export function buildRevenueOpportunity(
   const opportunities = buildQuestionOpportunities(keywordGroups);
   const drivers = opportunities
     .filter((item) =>
-      ["shipping", "refund", "return", "stock", "competitor", "compare"].includes(item.groupId),
+      ["shipping", "delivery", "payment", "refund", "return", "discount", "stock", "competitor", "compare"].includes(item.groupId),
     )
     .slice(0, 6)
     .map((item) => ({

@@ -260,7 +260,8 @@ export default function Dashboard() {
   const revenueDisplay = hasRevenueEstimate
       ? `${moneyRange(revenue.estimatedLow, revenue.estimatedHigh)}/mo`
     : "Connect orders to unlock recovery estimates";
-  const productsAtRisk = insight.productConfusion.length;
+  const storewideOpportunityCount = insight.storewideOpportunities.length;
+  const productOpportunityCount = insight.contentGaps.length + insight.productConfusion.length;
   const fallbackActions = [
     {
       id: "payment",
@@ -349,27 +350,27 @@ export default function Dashboard() {
 
           <div className="cia-metric-strip">
             <div className="cia-muted-panel">
-              <div className="cia-eyebrow">Revenue At Risk</div>
+              <div className="cia-eyebrow">Products Synced</div>
               <Text as="p" variant="headingLg">
-                {revenueDisplay}
+                {formatNumber(productCount)}
               </Text>
             </div>
             <div className="cia-muted-panel">
-              <div className="cia-eyebrow">Customers Impacted</div>
+              <div className="cia-eyebrow">Questions Imported</div>
               <Text as="p" variant="headingLg">
-                {formatNumber(insight.messageCount)}
+                {formatNumber(importedMessages)}
               </Text>
             </div>
             <div className="cia-muted-panel">
-              <div className="cia-eyebrow">Products at Risk</div>
+              <div className="cia-eyebrow">Storewide Opportunities</div>
               <Text as="p" variant="headingLg">
-                {formatNumber(productsAtRisk)}
+                {formatNumber(storewideOpportunityCount)}
               </Text>
             </div>
             <div className="cia-muted-panel">
-              <div className="cia-eyebrow">Competitor Pressure</div>
+              <div className="cia-eyebrow">Product Opportunities</div>
               <Text as="p" variant="headingLg">
-                {totalCompetitorMentions > 0 ? `${competitorPressure}/100` : "Not detected"}
+                {formatNumber(productOpportunityCount)}
               </Text>
             </div>
           </div>
@@ -380,7 +381,7 @@ export default function Dashboard() {
         <BlockStack gap="300">
           <SectionHeader
             title="What should I fix today?"
-            description="Start with the product content gaps most likely to remove buying objections and recover monthly revenue."
+            description="Start with storewide buying objections first; product-specific gaps appear when questions match products."
             actionLabel="Create recovery content"
             actionUrl="/app/faq"
           />

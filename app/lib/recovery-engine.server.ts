@@ -7,6 +7,8 @@ import type {
   ProductConfusionResult,
   ProductInput,
   QuestionOpportunity,
+  StorewideOpportunity,
+  StorewideOpportunityCode,
 } from "~/lib/types";
 import { KEYWORD_GROUPS_BY_ID } from "~/lib/engine/keyword-groups";
 import { normalizeText } from "~/lib/engine/normalize";
@@ -31,6 +33,35 @@ const SECTION_LABELS: Record<string, string> = {
   compare: "Comparison Details",
   competitor: "Quality Comparison",
 };
+
+const STOREWIDE_CODES: Partial<Record<KeywordGroupId, StorewideOpportunityCode>> = {
+  shipping: "STOREWIDE_SHIPPING_GAP",
+  delivery: "STOREWIDE_SHIPPING_GAP",
+  payment: "STOREWIDE_PAYMENT_GAP",
+  return: "STOREWIDE_RETURN_GAP",
+  refund: "STOREWIDE_RETURN_GAP",
+  discount: "STOREWIDE_DISCOUNT_GAP",
+};
+
+export function buildStorewideOpportunities(
+  questionOpportunities: QuestionOpportunity[],
+): StorewideOpportunity[] {
+  return questionOpportunities
+    .filter((item) => STOREWIDE_GROUP_IDS.has(item.groupId))
+    .map((item) => ({
+      code: STOREWIDE_CODES[item.groupId] ?? "STOREWIDE_SHIPPING_GAP",
+      groupId: item.groupId,
+      label: item.label,
+      mentionCount: item.count,
+      priorityScore: item.priorityScore,
+      severity: item.severity,
+      lowEstimate: item.lowEstimate,
+      highEstimate: item.highEstimate,
+      suggestedAction: item.suggestedAction,
+      exampleQuote: item.exampleQuote,
+    }))
+    .sort((a, b) => b.priorityScore - a.priorityScore || b.mentionCount - a.mentionCount);
+}
 
 export function opportunityRangeForGroups(
   groupIds: string[],

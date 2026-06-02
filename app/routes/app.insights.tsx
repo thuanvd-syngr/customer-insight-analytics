@@ -84,6 +84,8 @@ export default function Insights() {
         }));
 
   const hasData = opportunities.length > 0;
+  const storewideOpportunities = insight.storewideOpportunities;
+  const productOpportunities = insight.contentGaps;
 
   // Hero metrics derived from real loader values.
   const totalQuestions = opportunities.reduce((sum, item) => sum + item.count, 0);
@@ -160,16 +162,15 @@ export default function Insights() {
         <div className="cia-section-band">
           <BlockStack gap="300">
             <SectionHeader
-              title="Revenue Opportunities"
-              description="Each issue includes customer impact, trend, recovery estimate, priority, and the next fix."
+              title="Storewide Opportunities"
+              description="Questions about shipping, payment, delivery, returns, and discounts that apply across the store."
             />
-            {opportunities.slice(0, 4).map((item) => {
-              const productsAffected = insight.productConfusion.filter((product) =>
-                product.topGroups.includes(item.groupId),
-              ).length;
+            {(storewideOpportunities.length > 0 ? storewideOpportunities : opportunities.filter((item) =>
+              ["shipping", "delivery", "payment", "return", "refund", "discount"].includes(item.groupId),
+            )).slice(0, 6).map((item) => {
               return (
                 <div className="cia-queue-row" key={item.groupId}>
-                  <div className="cia-rank">{item.count}</div>
+                  <div className="cia-rank">{"mentionCount" in item ? item.mentionCount : item.count}</div>
                   <BlockStack gap="100">
                     <InlineStack gap="200" blockAlign="center">
                       <Text as="h3" variant="headingMd">
@@ -178,9 +179,9 @@ export default function Insights() {
                       <PriorityBadge level={item.severity} withLabel />
                     </InlineStack>
                     <InlineStack gap="300" blockAlign="center">
-                      <Badge tone="info">{`${item.count} mentions`}</Badge>
-                      <TrendIndicator value={item.trend7} suffix="growth" />
-                      <Badge tone="warning">{`${productsAffected || "Storewide"} products affected`}</Badge>
+                      <Badge tone="info">{`${"mentionCount" in item ? item.mentionCount : item.count} mentions`}</Badge>
+                      <TrendIndicator value={"trend7" in item ? item.trend7 : 0} suffix="growth" />
+                      <Badge tone="warning">Storewide</Badge>
                     </InlineStack>
                   </BlockStack>
                   <Text as="span" variant="headingMd" tone={item.highEstimate > 0 ? "success" : "subdued"}>
@@ -190,6 +191,37 @@ export default function Insights() {
                 </div>
               );
             })}
+          </BlockStack>
+        </div>
+
+        <div className="cia-section-band">
+          <BlockStack gap="300">
+            <SectionHeader
+              title="Product Opportunities"
+              description="Product-specific gaps only appear when customer questions mention a product title, handle, vendor, or product keywords."
+            />
+            {productOpportunities.length > 0 ? (
+              productOpportunities.slice(0, 6).map((gap) => (
+                <div className="cia-queue-row" key={gap.productId ?? gap.productTitle}>
+                  <div className="cia-rank">{gap.mentionCount}</div>
+                  <BlockStack gap="100">
+                    <Text as="h3" variant="headingMd">{gap.productTitle}</Text>
+                    <InlineStack gap="300" blockAlign="center">
+                      <Badge tone="info">{`${gap.mentionCount} matched questions`}</Badge>
+                      <Badge tone="warning">{gap.missingSections[0] ?? "Recovery gap"}</Badge>
+                    </InlineStack>
+                  </BlockStack>
+                  <Text as="span" variant="headingMd" tone={gap.estimatedHigh > 0 ? "success" : "subdued"}>
+                    {gap.estimatedHigh > 0 ? `${moneyRange(gap.estimatedLow, gap.estimatedHigh)}/mo` : "Qualitative"}
+                  </Text>
+                  <Button url={`/app/products/${encodeURIComponent(gap.productId ?? gap.productTitle)}`}>Open</Button>
+                </div>
+              ))
+            ) : (
+              <Banner tone="info" title="No product-specific opportunities yet">
+                <p>Storewide opportunities can be generated from general questions. Product opportunities require questions linked to synced products.</p>
+              </Banner>
+            )}
           </BlockStack>
         </div>
 

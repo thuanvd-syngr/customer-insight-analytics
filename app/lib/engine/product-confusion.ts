@@ -13,8 +13,21 @@ import { tokenize } from "./tokenize";
 
 function productTokens(product: ProductInput): string[] {
   const terms = tokenize(product.title, { removeStopWords: true, minLength: 4 });
+  const fullTitle = normalizeText(product.title);
+  if (fullTitle.length >= 4) terms.push(fullTitle);
   if (product.handle) terms.push(normalizeText(product.handle));
+  if (product.vendor) {
+    terms.push(normalizeText(product.vendor));
+    terms.push(...tokenize(product.vendor, { removeStopWords: true, minLength: 4 }));
+  }
+  if (product.productType) terms.push(...tokenize(product.productType, { removeStopWords: true, minLength: 4 }));
+  for (const tag of product.tags ?? []) terms.push(...tokenize(tag, { removeStopWords: true, minLength: 4 }));
   return [...new Set(terms.filter((term) => !STOP_WORDS.has(term)))];
+}
+
+export function messageMatchesProduct(message: NormalizedMessage, product: ProductInput): boolean {
+  const normalized = normalizeText(message.content);
+  return productTokens(product).some((term) => normalized.includes(term));
 }
 
 export function detectProductConfusion(

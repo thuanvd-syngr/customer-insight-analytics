@@ -8,20 +8,27 @@ import { detectProductConfusion } from "./product-confusion";
 import { detectRevenueLeakage } from "./revenue-leakage";
 import { dailyVolume } from "./trend";
 import { buildQuestionOpportunities, buildRecommendedActions, buildRevenueOpportunity } from "~/lib/revenue-opportunity.server";
-import { buildCompetitorThreats, buildContentGapAnalysis } from "~/lib/recovery-engine.server";
+import { buildCompetitorThreats, buildContentGapAnalysis, buildStorewideOpportunities } from "~/lib/recovery-engine.server";
 
 export function runAnalysis(input: AnalysisInput): InsightResult {
   const now = input.now ?? new Date();
   const windowDays = input.windowDays ?? 30;
   const start = now.getTime() - windowDays * 86_400_000;
-  const customerMessages = input.messages.filter(
+  const eligibleCustomerMessages = input.messages.filter(
     (message) =>
-      message.occurredAt.getTime() > start &&
-      message.occurredAt <= now &&
       message.source !== "product_text" &&
       message.source !== "product_tags",
   );
-  const keywordGroups = buildKeywordGroupResults(customerMessages, now, windowDays);
+  const windowedCustomerMessages = eligibleCustomerMessages.filter(
+    (message) =>
+      message.occurredAt.getTime() > start &&
+      message.occurredAt <= now,
+  );
+  const customerMessages = windowedCustomerMessages.length > 0
+    ? windowedCustomerMessages
+    : eligibleCustomerMessages;
+  const keywordWindowDays = windowedCustomerMessages.length > 0 ? windowDays : 36500;
+  const keywordGroups = buildKeywordGroupResults(customerMessages, now, keywordWindowDays);
   const productConfusion = detectProductConfusion(customerMessages, input.products);
   const faqOpportunities = detectFaqOpportunities(
     keywordGroups,
@@ -32,6 +39,7 @@ export function runAnalysis(input: AnalysisInput): InsightResult {
   const revenueLeakage = detectRevenueLeakage(keywordGroups);
   const revenueOpportunity = buildRevenueOpportunity(keywordGroups);
   const questionOpportunities = buildQuestionOpportunities(keywordGroups);
+  const storewideOpportunities = buildStorewideOpportunities(questionOpportunities);
   const recommendedActions = buildRecommendedActions(questionOpportunities);
   const contentGaps = buildContentGapAnalysis({
     storeProducts: input.products,
@@ -69,6 +77,7 @@ export function runAnalysis(input: AnalysisInput): InsightResult {
     revenueLeakage,
     revenueOpportunity,
     questionOpportunities,
+    storewideOpportunities,
     recommendedActions,
     contentGaps,
     competitorThreats,

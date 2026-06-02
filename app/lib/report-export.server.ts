@@ -23,15 +23,22 @@ export function buildExecutiveReport(input: {
     "## Biggest friction",
     ...safeInsight.questionOpportunities.slice(0, 5).map((item) => `- ${item.label}: ${item.suggestedAction} (${item.severity})`),
     "",
+    "## Storewide opportunities",
+    ...(safeInsight.storewideOpportunities.length
+      ? safeInsight.storewideOpportunities.slice(0, 5).map((item) => `- ${item.code}: ${item.label}, ${item.mentionCount} mentions`)
+      : ["- No storewide opportunities detected."]),
+    "",
     "## Competitor mentions",
     ...(safeInsight.competitors.length
       ? safeInsight.competitors.slice(0, 5).map((item) => `- ${item.name}: ${item.count} mentions`)
       : ["- Import more customer conversations to track competitor risk."]),
     "",
-    "## Product confusion",
-    ...(safeInsight.productConfusion.length
-      ? safeInsight.productConfusion.slice(0, 5).map((item) => `- ${item.productTitle}: score ${item.confusionScore}`)
-      : ["- Sync product and order data and run analysis to identify products at risk."]),
+    "## Product opportunities",
+    ...(safeInsight.contentGaps.length
+      ? safeInsight.contentGaps.slice(0, 5).map((item) => `- ${item.productTitle}: ${item.missingSections.join(", ")}`)
+      : safeInsight.productConfusion.length
+        ? safeInsight.productConfusion.slice(0, 5).map((item) => `- ${item.productTitle}: score ${item.confusionScore}`)
+        : ["- No product-specific opportunities detected."]),
     "",
     "## Suggested actions",
     ...safeInsight.revenueOpportunity.quickWins.map((item) => `- ${item.title}: ${item.action}`),
@@ -90,10 +97,16 @@ export function buildWeeklyEmailHtml(input: {
       (action) => `<li><strong>${escapeHtml(action.title)}</strong> — ${escapeHtml(action.recommendedAction)}</li>`,
     ),
     "</ul>",
-    "<h3>Products at risk</h3>",
+    "<h3>Storewide opportunities</h3>",
     "<ul>",
-    ...safeInsight.productConfusion.slice(0, 5).map(
-      (product) => `<li>${escapeHtml(product.productTitle)}: score ${product.confusionScore}/100</li>`,
+    ...safeInsight.storewideOpportunities.slice(0, 5).map(
+      (item) => `<li>${escapeHtml(item.label)}: ${item.mentionCount} mentions</li>`,
+    ),
+    "</ul>",
+    "<h3>Product opportunities</h3>",
+    "<ul>",
+    ...safeInsight.contentGaps.slice(0, 5).map(
+      (product) => `<li>${escapeHtml(product.productTitle)}: ${escapeHtml(product.missingSections.join(", "))}</li>`,
     ),
     "</ul>",
     "</body></html>",
@@ -119,6 +132,13 @@ export function buildReportCsv(insight: InsightResult): string {
       String(item.revenueImpact),
       item.suggestedAction,
     ]),
+    ...safeInsight.storewideOpportunities.map((item) => [
+      "storewide_opportunity",
+      item.code,
+      String(item.mentionCount),
+      String(item.highEstimate),
+      item.suggestedAction,
+    ]),
     ...safeInsight.competitors.map((item) => [
       "competitor",
       item.name,
@@ -132,6 +152,13 @@ export function buildReportCsv(insight: InsightResult): string {
       String(item.mentionCount),
       String(item.confusionScore),
       item.topGroups.join("|"),
+    ]),
+    ...safeInsight.contentGaps.map((item) => [
+      "product_opportunity",
+      item.productTitle,
+      String(item.mentionCount),
+      String(item.contentGapScore),
+      item.missingSections.join("|"),
     ]),
   ];
   return rows.map((row) => row.map((cell) => `"${cell.replace(/"/g, '""')}"`).join(",")).join("\n");

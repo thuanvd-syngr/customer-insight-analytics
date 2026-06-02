@@ -149,6 +149,25 @@ export interface QuestionOpportunity {
   exampleQuote?: string;
 }
 
+export type StorewideOpportunityCode =
+  | "STOREWIDE_SHIPPING_GAP"
+  | "STOREWIDE_PAYMENT_GAP"
+  | "STOREWIDE_RETURN_GAP"
+  | "STOREWIDE_DISCOUNT_GAP";
+
+export interface StorewideOpportunity {
+  code: StorewideOpportunityCode;
+  groupId: KeywordGroupId;
+  label: string;
+  mentionCount: number;
+  priorityScore: number;
+  severity: LeakageSeverity;
+  lowEstimate: number;
+  highEstimate: number;
+  suggestedAction: string;
+  exampleQuote?: string;
+}
+
 export interface QuickWin {
   title: string;
   action: string;
@@ -276,6 +295,7 @@ export interface InsightResult {
   revenueLeakage: RevenueLeakageAlert[];
   revenueOpportunity: RevenueOpportunity;
   questionOpportunities: QuestionOpportunity[];
+  storewideOpportunities: StorewideOpportunity[];
   recommendedActions: RecommendedAction[];
   contentGaps: ContentGapAnalysis[];
   competitorThreats: CompetitorThreat[];
@@ -310,6 +330,7 @@ export const EMPTY_INSIGHT: InsightResult = {
     alerts: [],
   },
   questionOpportunities: [],
+  storewideOpportunities: [],
   recommendedActions: [],
   contentGaps: [],
   competitorThreats: [],
@@ -350,6 +371,7 @@ export function normalizeInsightResult(value: Partial<InsightResult> | null | un
     revenueLeakage: value?.revenueLeakage ?? [],
     revenueOpportunity: normalizeRevenueOpportunity(value?.revenueOpportunity),
     questionOpportunities: value?.questionOpportunities ?? [],
+    storewideOpportunities: value?.storewideOpportunities ?? [],
     recommendedActions: value?.recommendedActions ?? [],
     contentGaps: value?.contentGaps ?? [],
     competitorThreats: value?.competitorThreats ?? [],
