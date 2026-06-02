@@ -18,6 +18,7 @@ import prisma from "~/db.server";
 import { ensureShop, getLatestRun } from "~/lib/shop.server";
 import { authenticate } from "~/shopify.server";
 import { AppPage, DashboardSkeleton, SectionHeader, formatNumber } from "~/components";
+import { safeCount } from "~/lib/prisma-safe";
 import { PLANS } from "~/lib/billing";
 import type { PlanId } from "~/lib/billing";
 
@@ -36,7 +37,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
     // Recent activity
     const lastRun = await getLatestRun(prisma, shop.id);
-    const publishedCount = await prisma.publishedContent.count({ where: { shopId: shop.id, status: "published" } });
+    const publishedCount = await safeCount(prisma, "publishedContent", { where: { shopId: shop.id, status: "published" } });
     const faqCount = await prisma.generatedFaq.count({ where: { shopId: shop.id } });
     const messageCount = await prisma.importedMessage.count({ where: { shopId: shop.id } });
     const competitorCount = await prisma.competitor.count({ where: { shopId: shop.id } });

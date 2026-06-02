@@ -17,7 +17,7 @@ import prisma from "~/db.server";
 import { ensureShop, getLatestRun, parseRun } from "~/lib/shop.server";
 import { authenticate } from "~/shopify.server";
 import { AppPage, DashboardSkeleton, SectionHeader } from "~/components";
-import { getDelegate } from "~/lib/prisma-safe";
+import { getDelegate, safeCount } from "~/lib/prisma-safe";
 import {
   buildOnboardingChecklist,
   isFirstRun,
@@ -36,7 +36,7 @@ async function buildInput(shopId: string, plan: string): Promise<OnboardingInput
   const [insightCount, faqCount, publishedCount, competitorCount] = await Promise.all([
     prisma.insightRun.count({ where: { shopId, status: "completed" } }),
     prisma.generatedFaq.count({ where: { shopId } }),
-    prisma.publishedContent.count({ where: { shopId, status: "published" } }),
+    safeCount(prisma, "publishedContent", { where: { shopId, status: "published" } }),
     prisma.competitor.count({ where: { shopId } }),
   ]);
 

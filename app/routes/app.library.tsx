@@ -54,12 +54,15 @@ export async function loader({ request }: LoaderFunctionArgs) {
       take: 200,
     });
 
-    // Load PublishedContent as library items
-    const rawPublished = await prisma.publishedContent.findMany({
-      where: { shopId: shop.id },
-      orderBy: { publishedAt: "desc" },
-      take: 200,
-    });
+    // Load PublishedContent as library items (safe: table may not exist yet)
+    const publishedDelegate = getDelegate(prisma, "publishedContent");
+    const rawPublished = publishedDelegate?.findMany
+      ? await publishedDelegate.findMany({
+          where: { shopId: shop.id },
+          orderBy: { publishedAt: "desc" },
+          take: 200,
+        })
+      : [];
 
     // Load ContentLibraryItems (new model)
     const contentLibraryItem = getDelegate(prisma, "contentLibraryItem");
@@ -86,7 +89,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
         usageCount: 0,
         createdAt: faq.createdAt.toISOString(),
       })),
-      ...rawPublished.map((pc) => ({
+      ...(rawPublished as Array<{ id: string; contentType: string; resourceTitle: string; publishedAt: Date | string; status: string }>).map((pc) => ({
         id: pc.id,
         itemType: ("faq_page" === pc.contentType ? "faq" : "page_template") as ContentLibraryItemType,
         title: pc.resourceTitle,
@@ -97,7 +100,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
         source: "generated" as const,
         status: (pc.status === "published" ? "active" : "archived") as "active" | "archived",
         usageCount: 0,
-        createdAt: pc.publishedAt.toISOString(),
+        createdAt: new Date(pc.publishedAt).toISOString(),
       })),
       ...(rawCustom as Array<{
         id: string;

@@ -48,14 +48,17 @@ export async function loader({ request }: LoaderFunctionArgs) {
         })
       : [];
 
-    // Synthetic events from published content
-    const publishedContent = await prisma.publishedContent.findMany({
-      where: { shopId: shop.id, status: "published" },
-      orderBy: { publishedAt: "desc" },
-      take: 100,
-    });
+    // Synthetic events from published content (safe: table may not exist yet)
+    const publishedDelegate = getDelegate(prisma, "publishedContent");
+    const publishedContent = publishedDelegate?.findMany
+      ? await publishedDelegate.findMany({
+          where: { shopId: shop.id, status: "published" },
+          orderBy: { publishedAt: "desc" },
+          take: 100,
+        })
+      : [];
 
-    const syntheticEvents: RawRevenueEvent[] = publishedContent.map((pc) => ({
+    const syntheticEvents: RawRevenueEvent[] = (publishedContent as Array<{ id: string; contentType: string; resourceTitle: string; publishedAt: Date | string }>).map((pc) => ({
       id: pc.id,
       eventType: "content_published" as RevenueEventType,
       description: `Published ${pc.contentType.replace(/_/g, " ")}: ${pc.resourceTitle}`,

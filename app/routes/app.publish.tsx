@@ -18,6 +18,7 @@ import { getDevPlanOverride, resolvePlan, type PlanId } from "~/lib/billing";
 import { generateFaqFromOpportunity } from "~/lib/faq-generator";
 import { hasPublishAbuse, hasXss, sanitizeText } from "~/lib/sanitize";
 import { logUsage } from "~/lib/log-usage.server";
+import { safeCount } from "~/lib/prisma-safe";
 import {
   ALL_PAGE_CONTENT_TYPES,
   BLOG_GROUP_LABELS,
@@ -114,8 +115,8 @@ export async function action({ request }: ActionFunctionArgs) {
   const form = await request.formData();
   const intent = String(form.get("intent") ?? "");
 
-  // Rate-limit check shared by all publish intents
-  const recentPublishCount = await prisma.publishedContent.count({
+  // Rate-limit check shared by all publish intents (safe: table may not exist yet)
+  const recentPublishCount = await safeCount(prisma, "publishedContent", {
     where: { shopId: shop.id, publishedAt: { gte: new Date(Date.now() - 86_400_000) } },
   });
 

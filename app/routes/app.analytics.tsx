@@ -19,7 +19,7 @@ import { ensureShop, getLatestRun, parseRun } from "~/lib/shop.server";
 import { EMPTY_INSIGHT } from "~/lib/types";
 import { authenticate } from "~/shopify.server";
 import { AppPage, DashboardSkeleton, SectionHeader, formatNumber, KpiCard, moneyRange } from "~/components";
-import { getDelegate } from "~/lib/prisma-safe";
+import { getDelegate, safeCount } from "~/lib/prisma-safe";
 import { aggregateByEventType, EVENT_TYPE_LABELS } from "~/lib/revenue-timeline";
 import type { RevenueEventType } from "~/lib/revenue-timeline";
 import { PLANS } from "~/lib/billing";
@@ -37,7 +37,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     const insight = parseRun(await getLatestRun(prisma, shop.id)) ?? EMPTY_INSIGHT;
 
     // Count published content
-    const publishedCount = await prisma.publishedContent.count({ where: { shopId: shop.id, status: "published" } });
+    const publishedCount = await safeCount(prisma, "publishedContent", { where: { shopId: shop.id, status: "published" } });
     const faqCount = await prisma.generatedFaq.count({ where: { shopId: shop.id } });
     const publishedFaqCount = await prisma.generatedFaq.count({ where: { shopId: shop.id, status: "published" } });
 
