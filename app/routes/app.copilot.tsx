@@ -29,6 +29,8 @@ import {
 } from "~/lib/copilot";
 import { canUseAIProductOptimize } from "~/lib/billing/plan-limits";
 import type { PlanId } from "~/lib/billing";
+import { sanitizeCopilotInput } from "~/lib/sanitize";
+import { logUsage } from "~/lib/log-usage.server";
 
 async function getCtx(request: Request) {
   const { session } = await authenticate.admin(request);
@@ -81,9 +83,14 @@ export async function action({ request }: ActionFunctionArgs) {
       return json({ error: "Please enter a question.", response: null });
     }
 
+    const { clean, flagged } = sanitizeCopilotInput(question, 500);
+    if (flagged) {
+      return json({ error: "Your question contains content that cannot be processed. Please rephrase and try again.", response: null });
+    }
+
     const insight = parseRun(await getLatestRun(prisma, shop.id)) ?? EMPTY_INSIGHT;
     const response = buildCopilotResponse({
-      question,
+      question: clean,
       insight,
       shopDomain: session.shop,
     });
@@ -95,7 +102,7 @@ export async function action({ request }: ActionFunctionArgs) {
         data: {
           shopId: shop.id,
           role: "user",
-          content: question,
+          content: clean,
           sessionRef: sessionRef || null,
           topic: response.topic,
           confidence: response.confidence,
@@ -112,6 +119,8 @@ export async function action({ request }: ActionFunctionArgs) {
         },
       });
     }
+
+    await logUsage(prisma, shop.id, "copilot_used", { topic: response.topic, confidence: response.confidence });
 
     return json({ error: null, response });
   } catch (error) {

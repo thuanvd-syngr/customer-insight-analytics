@@ -16,6 +16,8 @@ import {
 import prisma from "~/db.server";
 import { getDevPlanOverride, resolvePlan, type PlanId } from "~/lib/billing";
 import { generateFaqFromOpportunity } from "~/lib/faq-generator";
+import { hasPublishAbuse, hasXss, sanitizeText } from "~/lib/sanitize";
+import { logUsage } from "~/lib/log-usage.server";
 import {
   ALL_PAGE_CONTENT_TYPES,
   BLOG_GROUP_LABELS,
@@ -79,25 +81,43 @@ function buildFaqsForGroup(groupId: string, insight: typeof EMPTY_INSIGHT): FaqI
 }
 
 export async function loader({ request }: LoaderFunctionArgs) {
-  const { shop } = await getContext(request);
-  const [latestRun, published, counts] = await Promise.all([
-    getLatestRun(prisma, shop.id),
-    getPublishedContent(prisma, shop.id),
-    getPublishedCounts(prisma, shop.id),
-  ]);
-  const insight = parseRun(latestRun) ?? EMPTY_INSIGHT;
-  return json({
-    hasInsight: Boolean(latestRun),
-    published,
-    counts,
-    storeName: shop.shopDomain.replace(".myshopify.com", ""),
-  });
+  try {
+    const { shop } = await getContext(request);
+    const [latestRun, published, counts] = await Promise.all([
+      getLatestRun(prisma, shop.id),
+      getPublishedContent(prisma, shop.id),
+      getPublishedCounts(prisma, shop.id),
+    ]);
+    const insight = parseRun(latestRun) ?? EMPTY_INSIGHT;
+    return json({
+      hasInsight: Boolean(latestRun),
+      published,
+      counts,
+      storeName: shop.shopDomain.replace(".myshopify.com", ""),
+      loadError: null,
+    });
+  } catch (error) {
+    if (error instanceof Response) throw error;
+    console.error("Publish loader failed", error);
+    return json({
+      hasInsight: false,
+      published: [],
+      counts: { total: 0, pages: 0, productFaqs: 0, blogs: 0 },
+      storeName: "",
+      loadError: "Could not load publish data. Try refreshing.",
+    });
+  }
 }
 
 export async function action({ request }: ActionFunctionArgs) {
   const { shop, admin } = await getContext(request);
   const form = await request.formData();
   const intent = String(form.get("intent") ?? "");
+
+  // Rate-limit check shared by all publish intents
+  const recentPublishCount = await prisma.publishedContent.count({
+    where: { shopId: shop.id, publishedAt: { gte: new Date(Date.now() - 86_400_000) } },
+  });
 
   if (intent === "publish-page") {
     const rawType = String(form.get("contentType") ?? "");
@@ -108,6 +128,10 @@ export async function action({ request }: ActionFunctionArgs) {
     const latestRun = await getLatestRun(prisma, shop.id);
     const insight = parseRun(latestRun) ?? EMPTY_INSIGHT;
     const faqs = buildFaqsForType(contentType, insight);
+    const faqContent = faqs.map((f) => `${f.question} ${f.answer}`).join(" ");
+    if (hasPublishAbuse(faqContent, recentPublishCount)) {
+      return json({ error: "Content flagged: possible XSS or publish rate limit exceeded." }, { status: 400 });
+    }
     const result = await publishFaqAsShopifyPage({
       db: prisma,
       admin,
@@ -116,15 +140,24 @@ export async function action({ request }: ActionFunctionArgs) {
       faqs,
     });
     if (!result.ok) return json({ error: result.error ?? "Publish failed." });
+    await logUsage(prisma, shop.id, "content_published", { contentType });
     return redirect("/app/publish");
   }
 
   if (intent === "publish-blog") {
     const groupId = String(form.get("groupId") ?? "shipping");
-    const storeName = String(form.get("storeName") ?? "");
+    const rawStoreName = String(form.get("storeName") ?? "");
+    if (hasXss(rawStoreName)) {
+      return json({ error: "Store name contains invalid content." }, { status: 400 });
+    }
+    const storeName = sanitizeText(rawStoreName, 100);
     const latestRun = await getLatestRun(prisma, shop.id);
     const insight = parseRun(latestRun) ?? EMPTY_INSIGHT;
     const faqs = buildFaqsForGroup(groupId, insight);
+    const faqContent = faqs.map((f) => `${f.question} ${f.answer}`).join(" ");
+    if (hasPublishAbuse(faqContent, recentPublishCount)) {
+      return json({ error: "Content flagged: possible XSS or publish rate limit exceeded." }, { status: 400 });
+    }
     const result = await publishFaqAsBlogArticle({
       db: prisma,
       admin,
@@ -134,6 +167,7 @@ export async function action({ request }: ActionFunctionArgs) {
       storeName: storeName || undefined,
     });
     if (!result.ok) return json({ error: result.error ?? "Publish failed." });
+    await logUsage(prisma, shop.id, "content_published", { contentType: "blog_article", groupId });
     return redirect("/app/publish");
   }
 
@@ -162,14 +196,14 @@ function contentTypeTone(type: PageContentType): "info" | "success" | "warning" 
 }
 
 export default function PublishHub() {
-  const { hasInsight, published, counts, storeName } = useLoaderData<typeof loader>();
+  const { hasInsight, published, counts, storeName, loadError } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
   const busy = navigation.state !== "idle";
   const actionError = actionData && "error" in actionData ? actionData.error : null;
 
-  const activePublished = published.filter((p) => p.status === "published");
-  const failedPublished = published.filter((p) => p.status === "failed");
+  const activePublished = published.filter((p): p is NonNullable<typeof p> => p != null && p.status === "published");
+  const failedPublished = published.filter((p): p is NonNullable<typeof p> => p != null && p.status === "failed");
 
   return (
     <AppPage
@@ -179,6 +213,7 @@ export default function PublishHub() {
       secondaryAction={<Button url="/app">Back to Dashboard</Button>}
     >
       <BlockStack gap="600">
+        {loadError ? <Banner tone="critical" title="Load error"><p>{loadError}</p></Banner> : null}
         {actionError ? (
           <Banner tone="critical" title="Publish failed">
             <p>{actionError}</p>

@@ -19,6 +19,7 @@ import { ensureShop } from "~/lib/shop.server";
 import { authenticate } from "~/shopify.server";
 import { AppPage, ListSkeleton, SectionHeader, formatNumber } from "~/components";
 import { getDelegate } from "~/lib/prisma-safe";
+import { logUsage } from "~/lib/log-usage.server";
 import {
   buildRuleBasedProductSection,
   SECTION_TYPE_LABELS,
@@ -119,6 +120,7 @@ export async function action({ request, params }: ActionFunctionArgs) {
           },
         });
       }
+      await logUsage(prisma, shop.id, "marketing_generated", { sectionType });
       return json({ success: true, generated: result });
     }
 

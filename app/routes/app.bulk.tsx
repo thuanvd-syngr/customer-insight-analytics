@@ -22,6 +22,7 @@ import { EMPTY_INSIGHT } from "~/lib/types";
 import { authenticate } from "~/shopify.server";
 import { AppPage, EmptyStateCard, ListSkeleton, SectionHeader, formatNumber } from "~/components";
 import { getDelegate } from "~/lib/prisma-safe";
+import { logUsage } from "~/lib/log-usage.server";
 import {
   BULK_JOB_TYPE_LABELS,
   BULK_FILTER_LABELS,
@@ -176,6 +177,7 @@ export async function action({ request }: ActionFunctionArgs) {
         });
       }
 
+      await logUsage(prisma, shop.id, "bulk_job_started", { jobType, totalItems: filtered.length });
       return redirect("/app/bulk");
     }
 

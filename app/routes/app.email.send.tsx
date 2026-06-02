@@ -20,6 +20,7 @@ import { EMPTY_INSIGHT } from "~/lib/types";
 import { authenticate } from "~/shopify.server";
 import { AppPage, ListSkeleton, SectionHeader } from "~/components";
 import { getDelegate } from "~/lib/prisma-safe";
+import { logUsage } from "~/lib/log-usage.server";
 import {
   sendAndLog,
   getEmailProvider,
@@ -129,6 +130,7 @@ export async function action({ request }: ActionFunctionArgs) {
       if (!result.ok) {
         return json({ error: result.error ?? "Send failed." }, { status: 500 });
       }
+      await logUsage(prisma, shop.id, "marketing_generated", { reportType });
       return redirect("/app/email/send");
     }
 

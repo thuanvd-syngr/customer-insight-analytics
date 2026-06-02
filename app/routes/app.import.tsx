@@ -37,6 +37,7 @@ import { ensureShop, getLatestRun, markOnboarded, parseRun, saveInsightRun } fro
 import { authenticate } from "~/shopify.server";
 import { AppPage, KpiCard, SectionHeader } from "~/components";
 import { getDelegate, safeCount } from "~/lib/prisma-safe";
+import { logUsage } from "~/lib/log-usage.server";
 import { orderSyncStatusText, productSyncStatusText } from "~/lib/sync-status";
 import { getShopifyProductSchemaDiagnostics } from "~/lib/schema-diagnostics.server";
 import { ANALYSIS_MESSAGE_LIMIT, parseStringArray } from "~/lib/utils";
@@ -282,6 +283,7 @@ export async function action({ request }: ActionFunctionArgs) {
     await saveInsightRun(prisma, shop.id, runAnalysis(input), 30, currentProductCountForStale);
     await incrementUsage(prisma, shop.id, "analyses", isoWeekPeriod(now), 1);
     await markOnboarded(prisma, shop.id);
+    await logUsage(prisma, shop.id, "insight_run", { messageCount: currentMessageCount });
     return redirect("/app");
   }
 

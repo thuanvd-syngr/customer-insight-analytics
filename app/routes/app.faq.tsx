@@ -35,6 +35,7 @@ import {
 } from "~/lib/publish/shopify-publisher.server";
 import { EMPTY_INSIGHT, type KeywordGroupId } from "~/lib/types";
 import { authenticate } from "~/shopify.server";
+import { logUsage } from "~/lib/log-usage.server";
 
 type GeneratedFaqRecord = {
   id: string;
@@ -281,6 +282,7 @@ export async function action({ request }: ActionFunctionArgs) {
           });
         }));
       }
+      await logUsage(prisma, shop.id, "faq_generated", { count: Math.min(source.length, 8) });
       return redirect("/app/faq");
     }
 
