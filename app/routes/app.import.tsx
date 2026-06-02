@@ -24,7 +24,7 @@ import {
   resolvePlan,
   type PlanId,
 } from "~/lib/billing";
-import { parseImport } from "~/lib/import";
+import { parseImport, sanitizeImportSource } from "~/lib/import";
 import { runAnalysis } from "~/lib/engine";
 import { syncShopifyData } from "~/lib/shopify-data.server";
 import type { ShopifySyncResult } from "~/lib/shopify-data.server";
@@ -192,11 +192,7 @@ export async function action({ request }: ActionFunctionArgs) {
 
   if (intent === "import") {
     const raw = String(form.get("raw") ?? "");
-    const rawSource = String(form.get("source") ?? "manual");
-    const VALID_IMPORT_SOURCES = ["manual", "csv", "chat", "email"] as const;
-    const source = VALID_IMPORT_SOURCES.includes(rawSource as (typeof VALID_IMPORT_SOURCES)[number])
-      ? rawSource
-      : "manual";
+    const source = sanitizeImportSource(String(form.get("source") ?? ""));
     const parsed = parseImport(raw, { source, now });
     const gate = canImportMessages(usage, parsed.length);
     if (!gate.allowed) return json({ error: gate.reason }, { status: 403 });

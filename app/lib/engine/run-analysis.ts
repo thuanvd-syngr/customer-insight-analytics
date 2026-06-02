@@ -28,7 +28,27 @@ export function runAnalysis(input: AnalysisInput): InsightResult {
     ? windowedCustomerMessages
     : eligibleCustomerMessages;
   const keywordWindowDays = windowedCustomerMessages.length > 0 ? windowDays : 36500;
+
+  // Source breakdown — visible in logs when storewideFindings is unexpectedly 0
+  const sourceCounts: Record<string, number> = {};
+  for (const m of input.messages) sourceCounts[m.source] = (sourceCounts[m.source] ?? 0) + 1;
+  console.info("runAnalysis: message pipeline", {
+    totalMessages: input.messages.length,
+    sources: sourceCounts,
+    eligibleCustomerMessages: eligibleCustomerMessages.length,
+    windowedMessages: windowedCustomerMessages.length,
+    analysisMessages: customerMessages.length,
+    products: input.products.length,
+    windowDays,
+    keywordWindowDays,
+  });
+
   const keywordGroups = buildKeywordGroupResults(customerMessages, now, keywordWindowDays);
+
+  console.info("runAnalysis: keyword groups", {
+    total: keywordGroups.length,
+    groups: keywordGroups.map((g) => ({ groupId: g.groupId, count: g.count, uniqueMessages: g.uniqueMessages })),
+  });
   const productConfusion = detectProductConfusion(customerMessages, input.products);
   const faqOpportunities = detectFaqOpportunities(
     keywordGroups,
@@ -40,6 +60,14 @@ export function runAnalysis(input: AnalysisInput): InsightResult {
   const revenueOpportunity = buildRevenueOpportunity(keywordGroups);
   const questionOpportunities = buildQuestionOpportunities(keywordGroups);
   const storewideOpportunities = buildStorewideOpportunities(questionOpportunities);
+
+  console.info("runAnalysis: opportunity summary", {
+    questionOpportunities: questionOpportunities.length,
+    storewideOpportunities: storewideOpportunities.length,
+    storewideCodes: storewideOpportunities.map((o) => o.code),
+    productConfusion: productConfusion.length,
+  });
+
   const recommendedActions = buildRecommendedActions(questionOpportunities);
   const contentGaps = buildContentGapAnalysis({
     storeProducts: input.products,

@@ -46,8 +46,15 @@ const STOREWIDE_CODES: Partial<Record<KeywordGroupId, StorewideOpportunityCode>>
 export function buildStorewideOpportunities(
   questionOpportunities: QuestionOpportunity[],
 ): StorewideOpportunity[] {
-  return questionOpportunities
-    .filter((item) => STOREWIDE_GROUP_IDS.has(item.groupId))
+  const storewideItems = questionOpportunities.filter((item) => STOREWIDE_GROUP_IDS.has(item.groupId));
+  console.info("buildStorewideOpportunities", {
+    inputOpportunities: questionOpportunities.length,
+    inputGroupIds: questionOpportunities.map((o) => o.groupId),
+    storewideItems: storewideItems.length,
+    storewideGroupIds: storewideItems.map((item) => item.groupId),
+    storewideGroupIdSet: [...STOREWIDE_GROUP_IDS],
+  });
+  return storewideItems
     .map((item) => ({
       code: STOREWIDE_CODES[item.groupId] ?? "STOREWIDE_SHIPPING_GAP",
       groupId: item.groupId,

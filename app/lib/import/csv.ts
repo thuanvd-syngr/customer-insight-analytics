@@ -8,6 +8,15 @@ export interface ParsedMessage {
   externalId?: string | null;
 }
 
+// Sources accepted from user-facing import. product_text and product_tags are
+// reserved for Shopify catalog sync and must never be accepted from user input.
+export const VALID_IMPORT_SOURCES = ["manual", "csv", "chat", "email", "order_note"] as const;
+export type ValidImportSource = (typeof VALID_IMPORT_SOURCES)[number];
+
+export function sanitizeImportSource(raw: string): ValidImportSource {
+  return VALID_IMPORT_SOURCES.includes(raw as ValidImportSource) ? (raw as ValidImportSource) : "manual";
+}
+
 export function parseCsv(raw: string): string[][] {
   const rows: string[][] = [];
   let row: string[] = [];
