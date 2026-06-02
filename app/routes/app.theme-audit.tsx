@@ -5,6 +5,7 @@ import { Badge, Banner, BlockStack, Button, Card, InlineGrid, InlineStack, Text 
 
 import { AppPage, EmptyInsight, ListSkeleton, SectionHeader, formatNumber } from "~/components";
 import prisma from "~/db.server";
+import { formActionKey, makeActionKey } from "~/lib/action-loading";
 import { getDelegate } from "~/lib/prisma-safe";
 import { buildSampleInsight, isReviewerMode } from "~/lib/reviewer-mode.server";
 import { scanThemeContent } from "~/lib/revenue-automation";
@@ -112,7 +113,8 @@ export default function ThemeAudit() {
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
   if (navigation.state === "loading") return <ListSkeleton />;
-  const busy = navigation.state !== "idle";
+  const scanActionKey = makeActionKey("theme:scan");
+  const busy = navigation.state !== "idle" && formActionKey(navigation.formData) === scanActionKey;
   const visibleIssues = issues.filter((issue) => issue != null);
 
   return (
@@ -121,7 +123,8 @@ export default function ThemeAudit() {
       subtitle="Find missing storefront content that can block purchases before shoppers reach checkout."
       primaryAction={
         <Form method="post">
-          <Button submit variant="primary" loading={busy}>Scan Theme Content</Button>
+          <input type="hidden" name="actionKey" value={scanActionKey} />
+          <Button submit variant="primary" loading={busy} disabled={busy}>Scan Theme Content</Button>
         </Form>
       }
       secondaryAction={<Button url="/app/recovery">Open Recovery Plan</Button>}

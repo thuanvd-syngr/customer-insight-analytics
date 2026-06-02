@@ -11,7 +11,7 @@ Shopify embedded app that helps merchants find why customers do not buy. It uses
 5. Link or create a Shopify Partner app: `npm run config:link`
 6. Start dev: `npm run dev`
 
-Required production scopes: `read_products,read_orders,read_content`.
+Required production scopes: `read_products,write_products,read_orders,read_content,write_content`.
 
 For development-only plan testing, set:
 

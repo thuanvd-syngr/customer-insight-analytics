@@ -1,6 +1,6 @@
 import type { LoaderFunctionArgs } from "@remix-run/node";
 import { json } from "@remix-run/node";
-import { useLoaderData, useNavigation } from "@remix-run/react";
+import { useLoaderData } from "@remix-run/react";
 import { Badge, BlockStack, Button, Card, Text } from "@shopify/polaris";
 
 import {
@@ -8,7 +8,6 @@ import {
   EmptyStateCard,
   formatNumber,
   KpiCard,
-  ListSkeleton,
   money,
   ProductRecoveryCard,
   SectionHeader,
@@ -201,8 +200,6 @@ export default function Products() {
     analysisDebug,
     revenueDebug,
   } = useLoaderData<typeof loader>();
-  const navigation = useNavigation();
-  if (navigation.state === "loading") return <ListSkeleton />;
 
   const visibleSyncedProducts = syncedProducts.filter(
     (product): product is NonNullable<typeof product> => product !== null,

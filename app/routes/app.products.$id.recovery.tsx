@@ -24,7 +24,7 @@ import { logUsage } from "~/lib/log-usage.server";
 import { EMPTY_INSIGHT } from "~/lib/types";
 import type { KeywordGroupId } from "~/lib/types";
 import { isReviewerMode, buildSampleInsight } from "~/lib/reviewer-mode.server";
-import { ACTION_TIMEOUT_MS, formActionKey, makeActionKey, shopAdminProductUrl } from "~/lib/action-loading";
+import { ACTION_TIMEOUT_MS, formActionKey, makeActionKey, safeDecodeURIComponent, shopAdminProductUrl } from "~/lib/action-loading";
 
 const SECTION_LABELS: Record<string, string> = {
   ingredients: "Ingredients",
@@ -47,6 +47,7 @@ async function getCtx(request: Request) {
 
 export async function loader({ request, params }: LoaderFunctionArgs) {
   const productId = params.id ?? "";
+  const decodedId = safeDecodeURIComponent(productId);
   try {
     const { shop } = await getCtx(request);
 
@@ -59,7 +60,7 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
     const productDelegate = getDelegate(prisma, "shopifyProduct");
     const productRow = productDelegate?.findFirst
       ? await productDelegate.findFirst({
-          where: { shopId: shop.id, externalId: decodeURIComponent(productId) },
+          where: { shopId: shop.id, externalId: decodedId },
         })
       : null;
 
@@ -75,22 +76,22 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
     const productTitle =
       product?.title ??
       insight.productConfusion.find(
-        (p) => p.productId === decodeURIComponent(productId),
+        (p) => p.productId === decodedId,
       )?.productTitle ??
       insight.contentGaps.find(
-        (g) => g.productId === decodeURIComponent(productId),
+        (g) => g.productId === decodedId,
       )?.productTitle ??
       `Product ${productId}`;
 
     const confusion = insight.productConfusion.find(
       (p) =>
-        p.productId === decodeURIComponent(productId) ||
+        p.productId === decodedId ||
         p.productTitle.toLowerCase() === productTitle.toLowerCase(),
     );
 
     const gap = insight.contentGaps.find(
       (g) =>
-        g.productId === decodeURIComponent(productId) ||
+        g.productId === decodedId ||
         g.productTitle.toLowerCase() === productTitle.toLowerCase(),
     );
 
@@ -115,7 +116,7 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
 
     return json({
       productId,
-      decodedProductId: decodeURIComponent(productId),
+      decodedProductId: decodedId,
       productTitle,
       vendor: product?.vendor ?? null,
       productType: product?.productType ?? null,
@@ -127,14 +128,14 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
       existingDrafts,
       isSampleMode: sampleMode,
       shopDomain: shop.shopDomain,
-      adminProductUrl: shopAdminProductUrl(shop.shopDomain, decodeURIComponent(productId)),
+      adminProductUrl: shopAdminProductUrl(shop.shopDomain, decodedId),
       loadError: null,
     });
   } catch (error) {
     console.error("Product recovery loader failed", error);
     return json({
       productId,
-      decodedProductId: decodeURIComponent(productId),
+      decodedProductId: decodedId,
       productTitle: `Product ${productId}`,
       vendor: null,
       productType: null,
@@ -192,7 +193,7 @@ export async function action({ request, params }: ActionFunctionArgs) {
           data: {
             shopId: shop.id,
             groupId,
-            productId: decodeURIComponent(productId),
+            productId: safeDecodeURIComponent(productId),
             productTitle,
             question: faq.question,
             answerText: faq.answer,

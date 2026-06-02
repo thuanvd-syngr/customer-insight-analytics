@@ -318,6 +318,7 @@ export default function RecoveryAutomation() {
   if (navigation.state === "loading") return <ListSkeleton />;
   const summary = actionData?.summary;
   const actionError = actionData?.error;
+  const estimateCopy = "Estimate based on customer question frequency, content coverage, product count and benchmark conversion recovery models. Not actual revenue.";
 
   return (
     <AppPage
@@ -383,7 +384,8 @@ export default function RecoveryAutomation() {
             <BlockStack gap="100">
               <Text as="p" variant="bodySm" tone="subdued">Revenue at Risk</Text>
               <Text as="p" variant="headingXl">{money(plan.revenueAtRisk)}/mo</Text>
-              <Text as="p" variant="bodySm">Publish recovery content to start recovering sales.</Text>
+              <Text as="p" variant="bodySm">Estimated monthly revenue exposed to unanswered buying questions.</Text>
+              <Text as="p" variant="bodySm" tone="subdued">{estimateCopy}</Text>
             </BlockStack>
           </Card>
           <Card>
@@ -395,6 +397,7 @@ export default function RecoveryAutomation() {
                 <Text as="p" variant="headingXl">{score.potentialScore}</Text>
               </InlineStack>
               <Text as="p" variant="bodySm">Potential score after completing the recommended fixes.</Text>
+              <Text as="p" variant="bodySm" tone="subdued">{estimateCopy}</Text>
             </BlockStack>
           </Card>
           <Card>
@@ -402,6 +405,7 @@ export default function RecoveryAutomation() {
               <Text as="p" variant="bodySm" tone="subdued">Expected Recovery</Text>
               <Text as="p" variant="headingXl">{moneyRange(plan.expectedRecoveryLow, plan.expectedRecoveryHigh)}/mo</Text>
               <Text as="p" variant="bodySm">Estimated attribution, not order-level attribution.</Text>
+              <Text as="p" variant="bodySm" tone="subdued">{estimateCopy}</Text>
             </BlockStack>
           </Card>
           <Card>
@@ -477,13 +481,15 @@ export default function RecoveryAutomation() {
         </BlockStack>
 
         <BlockStack gap="300">
-          <SectionHeader title="Content Packs" description="Install reusable recovery packs as drafts. Merchants review before publishing." />
+          <SectionHeader title="Content Packs" description="Create reusable draft content. Nothing is published automatically; merchants review before publishing." />
           <InlineGrid columns={{ xs: 1, md: 3 }} gap="400">
             {contentPacks.map((pack) => (
               <Card key={pack.id}>
                 <BlockStack gap="200">
                   <Text as="h3" variant="headingMd">{pack.title}</Text>
                   <Text as="p" variant="bodySm" tone="subdued">{`${pack.faqs.length} FAQs, ${PAGE_TYPE_LABELS[pack.pageType]}, ${pack.schemaType} schema`}</Text>
+                  <Text as="p" variant="bodySm">Creates drafts only. Nothing is published automatically.</Text>
+                  <Text as="p" variant="bodySm" tone="subdued">Review the draft content before publishing it to Shopify.</Text>
                   <InlineStack gap="100">
                     {pack.suggestedPublishTargets.slice(0, 3).map((target) => <Badge key={target}>{target}</Badge>)}
                   </InlineStack>
@@ -498,7 +504,7 @@ export default function RecoveryAutomation() {
                       size="slim"
                       onClick={() => markPending(makeActionKey("install:content-pack", pack.id))}
                     >
-                      Install Pack
+                      Create Drafts
                     </Button>
                   </Form>
                 </BlockStack>

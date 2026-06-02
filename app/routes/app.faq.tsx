@@ -17,7 +17,14 @@ import {
   type PriorityLevel,
 } from "~/components";
 import prisma from "~/db.server";
-import { ACTION_TIMEOUT_MS, formActionKey, makeActionKey } from "~/lib/action-loading";
+import {
+  ACTION_TIMEOUT_MS,
+  CONTENT_PUBLISH_SCOPES,
+  PRODUCT_FAQ_PUBLISH_SCOPES,
+  formActionKey,
+  makeActionKey,
+  missingScopes,
+} from "~/lib/action-loading";
 import { generateContentWithFallback, getAIProvider, isAIEnabled, CONTENT_TYPE_LABELS } from "~/lib/ai";
 import type { ContentType } from "~/lib/ai";
 import { getDevPlanOverride, resolvePlan, type PlanId } from "~/lib/billing";
@@ -150,6 +157,8 @@ export async function action({ request }: ActionFunctionArgs) {
     const { shop, plan, admin, session } = await getContext(request);
     const form = await request.formData();
     const intent = String(form.get("intent") ?? "generate");
+    const contentScopeMissing = missingScopes(session.scope, CONTENT_PUBLISH_SCOPES);
+    const productFaqScopeMissing = missingScopes(session.scope, PRODUCT_FAQ_PUBLISH_SCOPES);
     const groupId = String(form.get("groupId") ?? "shipping") as KeywordGroupId;
     const question = String(form.get("question") ?? "What should customers know before buying?");
     const productId = String(form.get("productId") ?? "") || null;
@@ -194,6 +203,9 @@ export async function action({ request }: ActionFunctionArgs) {
     }
 
     if (intent === "publish") {
+      if (productFaqScopeMissing.length > 0) {
+        return json({ error: `Missing Shopify scope${productFaqScopeMissing.length === 1 ? "" : "s"}: ${productFaqScopeMissing.join(", ")}. Reauthorize the app before publishing product FAQs.` }, { status: 403 });
+      }
       const id = String(form.get("id") ?? "");
       const rawTarget = String(form.get("publishTarget") ?? "metafield");
       const VALID_TARGETS = ["metafield", "append_description", "faq_block"] as const;
@@ -289,6 +301,9 @@ export async function action({ request }: ActionFunctionArgs) {
     }
 
     if (intent === "publish-page") {
+      if (contentScopeMissing.length > 0) {
+        return json({ error: `Missing Shopify scope${contentScopeMissing.length === 1 ? "" : "s"}: ${contentScopeMissing.join(", ")}. Reauthorize the app before publishing pages.` }, { status: 403 });
+      }
       const id = String(form.get("id") ?? "");
       const rawType = String(form.get("contentType") ?? "faq_page");
       const VALID_PAGE_TYPES: PageContentType[] = [
@@ -309,6 +324,9 @@ export async function action({ request }: ActionFunctionArgs) {
     }
 
     if (intent === "publish-blog") {
+      if (contentScopeMissing.length > 0) {
+        return json({ error: `Missing Shopify scope${contentScopeMissing.length === 1 ? "" : "s"}: ${contentScopeMissing.join(", ")}. Reauthorize the app before publishing blog articles.` }, { status: 403 });
+      }
       const id = String(form.get("id") ?? "");
       const groupId = String(form.get("groupId") ?? "shipping");
       const faqModel = generatedFaqModel();

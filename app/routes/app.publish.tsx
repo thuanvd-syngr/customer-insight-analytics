@@ -15,7 +15,14 @@ import {
 } from "@shopify/polaris";
 
 import prisma from "~/db.server";
-import { ACTION_TIMEOUT_MS, formActionKey, makeActionKey } from "~/lib/action-loading";
+import {
+  ACTION_TIMEOUT_MS,
+  CONTENT_PUBLISH_SCOPES,
+  PRODUCT_FAQ_PUBLISH_SCOPES,
+  formActionKey,
+  makeActionKey,
+  missingScopes,
+} from "~/lib/action-loading";
 import { getDevPlanOverride, resolvePlan, type PlanId } from "~/lib/billing";
 import { generateFaqFromOpportunity } from "~/lib/faq-generator";
 import { hasPublishAbuse, hasXss, sanitizeText } from "~/lib/sanitize";
@@ -112,6 +119,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
       faqCount: buildFaqsForGroup(groupId, insight).length,
     }));
     const productFaqPreview = (generatedFaqs as Array<{ id: string; productId?: string | null; question: string; status: string }>).filter((faq) => faq.productId);
+    const missingContentScopes = missingScopes(session.scope, CONTENT_PUBLISH_SCOPES);
+    const missingProductFaqScopes = missingScopes(session.scope, PRODUCT_FAQ_PUBLISH_SCOPES);
     return json({
       hasInsight: Boolean(latestRun),
       published,
@@ -121,7 +130,14 @@ export async function loader({ request }: LoaderFunctionArgs) {
       productFaqPreview,
       recentBulkJobs,
       diagnostics: {
-        writeContentScope: (session.scope ?? "").split(",").includes("write_content"),
+        scopes: {
+          granted: (session.scope ?? "").split(",").map((scope) => scope.trim()).filter(Boolean),
+          requiredContent: CONTENT_PUBLISH_SCOPES,
+          requiredProductFaq: PRODUCT_FAQ_PUBLISH_SCOPES,
+          missingContent: missingContentScopes,
+          missingProductFaq: missingProductFaqScopes,
+        },
+        writeContentScope: missingContentScopes.length === 0,
         shopDomain: shop.shopDomain,
         onlineStorePublishCapability: counts.pages > 0 || published.some((item) => item.status === "published"),
         targetTypes: ["page", "blog", "product_faq"],
@@ -141,6 +157,13 @@ export async function loader({ request }: LoaderFunctionArgs) {
       productFaqPreview: [],
       recentBulkJobs: [],
       diagnostics: {
+        scopes: {
+          granted: [],
+          requiredContent: CONTENT_PUBLISH_SCOPES,
+          requiredProductFaq: PRODUCT_FAQ_PUBLISH_SCOPES,
+          missingContent: CONTENT_PUBLISH_SCOPES,
+          missingProductFaq: PRODUCT_FAQ_PUBLISH_SCOPES,
+        },
         writeContentScope: false,
         shopDomain: "",
         onlineStorePublishCapability: false,
@@ -153,9 +176,18 @@ export async function loader({ request }: LoaderFunctionArgs) {
 }
 
 export async function action({ request }: ActionFunctionArgs) {
-  const { shop, admin } = await getContext(request);
+  const { shop, admin, session } = await getContext(request);
   const form = await request.formData();
   const intent = String(form.get("intent") ?? "");
+
+  const contentScopeMissing = missingScopes(session.scope, CONTENT_PUBLISH_SCOPES);
+  const productFaqScopeMissing = missingScopes(session.scope, PRODUCT_FAQ_PUBLISH_SCOPES);
+  const requiresContentPublish = ["publish-page", "publish-blog", "publish-all-recovery"].includes(intent);
+  if (requiresContentPublish && contentScopeMissing.length > 0) {
+    return json({
+      error: `Missing Shopify scope${contentScopeMissing.length === 1 ? "" : "s"}: ${contentScopeMissing.join(", ")}. Update app scopes, redeploy, then reinstall or reauthorize the app.`,
+    }, { status: 403 });
+  }
 
   // Rate-limit check shared by all publish intents (safe: table may not exist yet)
   const recentPublishCount = await safeCount(prisma, "publishedContent", {
@@ -278,6 +310,13 @@ export async function action({ request }: ActionFunctionArgs) {
       await recordItem(groupId, "blog", result.ok, result.resourceTitle, result.error);
     }
     for (const faq of productFaqs as Array<{ id: string; question: string }>) {
+      if (productFaqScopeMissing.length > 0) {
+        failed++;
+        const error = `Missing Shopify scope${productFaqScopeMissing.length === 1 ? "" : "s"} for product FAQ publish: ${productFaqScopeMissing.join(", ")}`;
+        errors.push(error);
+        await recordItem(faq.id, "product_faq", false, faq.question, error);
+        continue;
+      }
       const result = await publishGeneratedFaq({ db: prisma, admin, shopId: shop.id, faqId: faq.id, target: "metafield" });
       const ok = result.status === "published";
       if (ok) success++; else { failed++; errors.push(result.error ?? `${faq.question} failed`); }
@@ -371,6 +410,7 @@ export default function PublishHub() {
 
   const activePublished = published.filter((p): p is NonNullable<typeof p> => p != null && p.status === "published");
   const failedPublished = published.filter((p): p is NonNullable<typeof p> => p != null && p.status === "failed");
+  const contentPublishDisabled = diagnostics.scopes.missingContent.length > 0;
 
   return (
     <AppPage
@@ -461,7 +501,7 @@ export default function PublishHub() {
                 submit
                 variant="primary"
                 loading={loadingFor(makeActionKey("publish:all-recovery"))}
-                disabled={loadingFor(makeActionKey("publish:all-recovery"))}
+                disabled={contentPublishDisabled || loadingFor(makeActionKey("publish:all-recovery"))}
                 onClick={() => markPending(makeActionKey("publish:all-recovery"))}
               >
                 Confirm and Publish All Recovery Content
@@ -486,22 +526,47 @@ export default function PublishHub() {
             <SectionHeader title="Publish Diagnostics" description="Use this when a page, blog, or product FAQ publish fails." />
             <InlineGrid columns={{ xs: 1, md: 4 }} gap="300">
               <BlockStack gap="050">
-                <Text as="p" variant="bodySm" tone="subdued">write_content scope</Text>
+                <Text as="p" variant="bodySm" tone="subdued">Content scopes</Text>
                 <Badge tone={diagnostics.writeContentScope ? "success" : "critical"}>{diagnostics.writeContentScope ? "Granted" : "Missing"}</Badge>
+                {diagnostics.scopes.missingContent.length > 0 ? (
+                  <Text as="p" variant="bodySm" tone="critical">{`Missing: ${diagnostics.scopes.missingContent.join(", ")}`}</Text>
+                ) : null}
               </BlockStack>
               <BlockStack gap="050">
-                <Text as="p" variant="bodySm" tone="subdued">Online store publish</Text>
+                <Text as="p" variant="bodySm" tone="subdued">Product FAQ scopes</Text>
+                <Badge tone={diagnostics.scopes.missingProductFaq.length === 0 ? "success" : "warning"}>
+                  {diagnostics.scopes.missingProductFaq.length === 0 ? "Granted" : "Partial"}
+                </Badge>
+                {diagnostics.scopes.missingProductFaq.length > 0 ? (
+                  <Text as="p" variant="bodySm" tone="critical">{`Missing: ${diagnostics.scopes.missingProductFaq.join(", ")}`}</Text>
+                ) : null}
+              </BlockStack>
+              <BlockStack gap="050">
+                <Text as="p" variant="bodySm" tone="subdued">Publish capability</Text>
                 <Badge tone={diagnostics.onlineStorePublishCapability ? "success" : "info"}>{diagnostics.onlineStorePublishCapability ? "Verified" : "Not verified yet"}</Badge>
               </BlockStack>
               <BlockStack gap="050">
-                <Text as="p" variant="bodySm" tone="subdued">Shop domain</Text>
+                <Text as="p" variant="bodySm" tone="subdued">Store status</Text>
                 <Text as="p" variant="bodySm">{diagnostics.shopDomain || "Unknown"}</Text>
+              </BlockStack>
+              <BlockStack gap="050">
+                <Text as="p" variant="bodySm" tone="subdued">Theme status</Text>
+                <Text as="p" variant="bodySm">Theme audit available</Text>
+              </BlockStack>
+              <BlockStack gap="050">
+                <Text as="p" variant="bodySm" tone="subdued">Content status</Text>
+                <Text as="p" variant="bodySm">{`${formatNumber(counts.total)} published assets`}</Text>
               </BlockStack>
               <BlockStack gap="050">
                 <Text as="p" variant="bodySm" tone="subdued">Target types</Text>
                 <Text as="p" variant="bodySm">{diagnostics.targetTypes.join(", ")}</Text>
               </BlockStack>
             </InlineGrid>
+            {diagnostics.scopes.missingContent.length > 0 ? (
+              <Banner tone="warning" title="Publishing is disabled until scopes are updated">
+                <p>Required content publish scopes are missing. Add the scopes in Shopify app configuration, redeploy, and reauthorize the app.</p>
+              </Banner>
+            ) : null}
           </BlockStack>
         </Card>
 
@@ -530,7 +595,7 @@ export default function PublishHub() {
                       <Button
                         submit
                         loading={loadingFor(makeActionKey("publish:page", type))}
-                        disabled={loadingFor(makeActionKey("publish:page", type))}
+                        disabled={contentPublishDisabled || loadingFor(makeActionKey("publish:page", type))}
                         variant={alreadyPublished ? undefined : "primary"}
                         size="slim"
                         onClick={() => markPending(makeActionKey("publish:page", type))}
@@ -568,7 +633,7 @@ export default function PublishHub() {
                       <Button
                         submit
                         loading={loadingFor(makeActionKey("publish:blog", groupId))}
-                        disabled={loadingFor(makeActionKey("publish:blog", groupId))}
+                        disabled={contentPublishDisabled || loadingFor(makeActionKey("publish:blog", groupId))}
                         size="slim"
                         onClick={() => markPending(makeActionKey("publish:blog", groupId))}
                       >
@@ -592,6 +657,7 @@ export default function PublishHub() {
                   <InlineStack gap="200" blockAlign="center" align="space-between">
                     <BlockStack gap="050">
                       <Text as="p" variant="bodySm">{item.resourceTitle}</Text>
+                      <Text as="p" variant="bodySm" tone="subdued">{`Target: ${item.contentType.replace(/_/g, " ")} · Failed ${new Date(item.publishedAt).toLocaleString()}`}</Text>
                       <Text as="p" variant="bodySm" tone="critical">{item.error ?? "Unknown error"}</Text>
                     </BlockStack>
                     <InlineStack gap="200" blockAlign="center">
@@ -606,7 +672,7 @@ export default function PublishHub() {
                           submit
                           size="slim"
                           loading={loadingFor(makeActionKey("publish:retry", item.id))}
-                          disabled={loadingFor(makeActionKey("publish:retry", item.id))}
+                          disabled={contentPublishDisabled || loadingFor(makeActionKey("publish:retry", item.id))}
                           onClick={() => markPending(makeActionKey("publish:retry", item.id))}
                         >
                           Retry failed

@@ -25,7 +25,7 @@ export function actionTimedOut(startedAt: number | null, now: number, timeoutMs 
 
 export function extractShopifyNumericId(gidOrId: string | null | undefined): string | null {
   if (!gidOrId) return null;
-  const decoded = decodeURIComponent(gidOrId);
+  const decoded = safeDecodeURIComponent(gidOrId);
   const match = decoded.match(/(?:gid:\/\/shopify\/Product\/)?(\d+)$/);
   return match?.[1] ?? null;
 }
@@ -40,3 +40,28 @@ export function shopAdminProductUrl(shopDomain: string, gidOrId: string | null |
 export function productRecoveryPath(productIdOrTitle: string): string {
   return `/app/products/${encodeURIComponent(productIdOrTitle)}/recovery`;
 }
+
+export function safeDecodeURIComponent(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+export function parseShopifyScopes(scopeString: string | null | undefined): Set<string> {
+  return new Set(
+    (scopeString ?? "")
+      .split(",")
+      .map((scope) => scope.trim())
+      .filter(Boolean),
+  );
+}
+
+export function missingScopes(grantedScopes: string | null | undefined, requiredScopes: string[]): string[] {
+  const granted = parseShopifyScopes(grantedScopes);
+  return requiredScopes.filter((scope) => !granted.has(scope));
+}
+
+export const CONTENT_PUBLISH_SCOPES = ["read_content", "write_content"];
+export const PRODUCT_FAQ_PUBLISH_SCOPES = ["read_products", "write_products"];
