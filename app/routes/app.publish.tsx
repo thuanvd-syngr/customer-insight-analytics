@@ -105,7 +105,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       published: [],
       counts: { total: 0, pages: 0, productFaqs: 0, blogs: 0 },
       storeName: "",
-      loadError: "Could not load publish data. Try refreshing.",
+      loadError: "Publish data is loading. Refresh in a moment — your published pages are safe.",
     });
   }
 }
@@ -214,10 +214,11 @@ export default function PublishHub() {
       secondaryAction={<Button url="/app">Back to Dashboard</Button>}
     >
       <BlockStack gap="600">
-        {loadError ? <Banner tone="critical" title="Load error"><p>{loadError}</p></Banner> : null}
+        {loadError ? <Banner tone="info" title="Content loading"><p>{loadError}</p></Banner> : null}
         {actionError ? (
-          <Banner tone="critical" title="Publish failed">
+          <Banner tone="warning" title="Publish did not complete">
             <p>{actionError}</p>
+            <p>Your store data is safe. Check your Shopify store connection and try again.</p>
           </Banner>
         ) : null}
 
@@ -353,17 +354,34 @@ export default function PublishHub() {
                           {`Published ${new Date(item.publishedAt).toLocaleDateString()}`}
                         </Text>
                       </BlockStack>
-                      {item.resourceId ? (
-                        <Form method="post">
-                          <input type="hidden" name="intent" value="delete" />
-                          <input type="hidden" name="id" value={item.id} />
-                          <input type="hidden" name="resourceId" value={item.resourceId} />
-                          <input type="hidden" name="contentType" value={item.contentType} />
-                          <Button submit tone="critical" size="slim" loading={busy}>
-                            Delete from Shopify
-                          </Button>
-                        </Form>
-                      ) : null}
+                      <InlineStack gap="200">
+                        {item.resourceId ? (() => {
+                          const numId = item.resourceId.replace(/^gid:\/\/shopify\/[A-Za-z]+\//, "");
+                          const adminPath = item.contentType === "blog_article"
+                            ? `articles/${numId}`
+                            : `pages/${numId}`;
+                          return (
+                            <Button
+                              url={`https://${storeName}.myshopify.com/admin/${adminPath}`}
+                              target="_blank"
+                              size="slim"
+                            >
+                              View in Shopify
+                            </Button>
+                          );
+                        })() : null}
+                        {item.resourceId ? (
+                          <Form method="post">
+                            <input type="hidden" name="intent" value="delete" />
+                            <input type="hidden" name="id" value={item.id} />
+                            <input type="hidden" name="resourceId" value={item.resourceId} />
+                            <input type="hidden" name="contentType" value={item.contentType} />
+                            <Button submit tone="critical" size="slim" loading={busy}>
+                              Delete from Shopify
+                            </Button>
+                          </Form>
+                        ) : null}
+                      </InlineStack>
                     </InlineStack>
                   </BlockStack>
                 ))}

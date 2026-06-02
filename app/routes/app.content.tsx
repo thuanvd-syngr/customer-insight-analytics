@@ -25,6 +25,7 @@ import { getDelegate } from "~/lib/prisma-safe";
 type ContentItem = {
   id: string;
   kind: "faq" | "published" | "library";
+  category: "faq_draft" | "published_page" | "blog_article" | "product_faq" | "library_item";
   title: string;
   subtitle: string;
   status: "active" | "published" | "draft" | "archived";
@@ -54,9 +55,11 @@ const STATUS_OPTIONS = [
 
 const KIND_OPTIONS = [
   { label: "All content", value: "" },
-  { label: "FAQs", value: "faq" },
-  { label: "Published Pages", value: "published" },
-  { label: "Library Items", value: "library" },
+  { label: "FAQ Drafts", value: "faq_draft" },
+  { label: "Published Pages", value: "published_page" },
+  { label: "Blog Articles", value: "blog_article" },
+  { label: "Product FAQs", value: "product_faq" },
+  { label: "Library Items", value: "library_item" },
 ];
 
 async function getCtx(request: Request) {
@@ -107,6 +110,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     const faqItems: ContentItem[] = rawFaqs.map((f) => ({
       id: f.id,
       kind: "faq",
+      category: ((f as { productId?: string | null }).productId ? "product_faq" : "faq_draft") as ContentItem["category"],
       title: f.question,
       subtitle: `${f.groupId ?? "General"} · ${f.source === "ai" ? "AI generated" : "Manual"}`,
       status: (f.status === "published" ? "published" : f.status === "generated" ? "draft" : "archived") as ContentItem["status"],
@@ -123,6 +127,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     }>).map((pc) => ({
       id: pc.id,
       kind: "published",
+      category: (pc.contentType === "blog_article" ? "blog_article" : "published_page") as ContentItem["category"],
       title: pc.resourceTitle,
       subtitle: pc.contentType.replace(/_/g, " "),
       status: (pc.status === "published" ? "published" : "archived") as ContentItem["status"],
@@ -139,6 +144,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     }>).map((c) => ({
       id: c.id,
       kind: "library",
+      category: "library_item" as ContentItem["category"],
       title: c.title,
       subtitle: c.itemType.replace(/_/g, " "),
       status: (c.status === "active" ? "active" : "archived") as ContentItem["status"],
@@ -197,7 +203,7 @@ export default function ContentHub() {
   }
 
   const filtered = items.filter((item) => {
-    if (kindFilter && item.kind !== kindFilter) return false;
+    if (kindFilter && item.category !== kindFilter) return false;
     if (statusFilter && item.status !== statusFilter && !(statusFilter === "active" && item.status === "published")) return false;
     if (search) {
       const q = search.toLowerCase();
@@ -288,8 +294,8 @@ export default function ContentHub() {
                   autoComplete="off"
                 />
               </div>
-              <div style={{ minWidth: "170px" }}>
-                <Select label="Type" options={KIND_OPTIONS} value={kindFilter} onChange={(v) => updateFilter("kind", v)} />
+              <div style={{ minWidth: "190px" }}>
+                <Select label="Category" options={KIND_OPTIONS} value={kindFilter} onChange={(v) => updateFilter("kind", v)} />
               </div>
               <div style={{ minWidth: "170px" }}>
                 <Select label="Status" options={STATUS_OPTIONS} value={statusFilter} onChange={(v) => updateFilter("status", v)} />
@@ -300,10 +306,12 @@ export default function ContentHub() {
 
         {filtered.length === 0 ? (
           <EmptyStateCard
-            title="No content yet"
-            body="Generate FAQs from your Opportunities page or publish pages to Shopify to start building your content library."
-            actionLabel="Generate FAQ"
-            actionUrl="/app/faq"
+            title={kindFilter || statusFilter || search ? "No content matches your filters" : "Create your first recovery content"}
+            body={kindFilter || statusFilter || search
+              ? "Try adjusting the filters or search term above to find your content."
+              : "Generate FAQ answers from your Opportunities page, publish pages to Shopify, or build your content library to start recovering revenue."}
+            actionLabel={kindFilter || statusFilter || search ? "Clear filters" : "Generate FAQ"}
+            actionUrl={kindFilter || statusFilter || search ? "/app/content" : "/app/faq"}
           />
         ) : (
           <Card>

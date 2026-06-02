@@ -20,6 +20,7 @@ import { ensureShop, getLatestRun, markOnboarded, parseRun, saveInsightRun } fro
 import { syncShopifyData } from "~/lib/shopify-data.server";
 import { getPublishedCounts } from "~/lib/publish/shopify-publisher.server";
 import { isSampleDataEnabled } from "~/lib/sample-data";
+import { isReviewerMode, buildSampleInsight } from "~/lib/reviewer-mode.server";
 import { authenticate } from "~/shopify.server";
 import { ANALYSIS_MESSAGE_LIMIT, parseStringArray } from "~/lib/utils";
 import {
@@ -106,7 +107,12 @@ export async function loader({ request }: LoaderFunctionArgs) {
     const latestRun = await getLatestRun(prisma, shop.id);
     const existingLocalData = await prisma.importedMessage.count({ where: { shopId: shop.id } });
     const autoSyncNeeded = !latestRun && existingLocalData === 0;
-    const insight = normalizeInsightResult(parseRun(latestRun) ?? EMPTY_INSIGHT);
+    const sampleMode = !latestRun && existingLocalData === 0
+      ? await isReviewerMode(prisma, shop.id)
+      : false;
+    const insight = normalizeInsightResult(
+      sampleMode ? buildSampleInsight() : (parseRun(latestRun) ?? EMPTY_INSIGHT),
+    );
     const [importedMessages, orderCount, productCount, publishedCounts] = await Promise.all([
       prisma.importedMessage.count({ where: { shopId: shop.id } }),
       prisma.shopifyOrder.count({ where: { shopId: shop.id } }),
@@ -122,13 +128,14 @@ export async function loader({ request }: LoaderFunctionArgs) {
     });
     const usage = await getUsageSnapshot(prisma, shop.id, plan, new Date());
     return json({
-      ...buildDashboardViewModel({ insight, importedMessages, hasRun: Boolean(latestRun) }),
+      ...buildDashboardViewModel({ insight, importedMessages, hasRun: Boolean(latestRun) || sampleMode }),
       orderCount,
       productCount,
       publishedTotal: publishedCounts.total,
       autoSyncNeeded,
       loadError: null,
       sampleDataEnabled: isSampleDataEnabled(),
+      isSampleMode: sampleMode,
     });
   } catch (error) {
     if (error instanceof Response) throw error;
@@ -141,6 +148,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       autoSyncNeeded: false,
       loadError: "Store data is loading. Refresh in a moment to see your recovery insights.",
       sampleDataEnabled: isSampleDataEnabled(),
+      isSampleMode: false,
     });
   }
 }
@@ -159,6 +167,7 @@ export default function Dashboard() {
     autoSyncNeeded,
     loadError,
     sampleDataEnabled,
+    isSampleMode,
   } = useLoaderData<typeof loader>();
 
   const syncer = useFetcher<typeof action>();
@@ -319,7 +328,18 @@ export default function Dashboard() {
       primaryAction={<Button url="/app/import" variant="primary">Find Revenue Opportunities</Button>}
       secondaryAction={<Button url="/app/import">Add Customer Questions</Button>}
     >
-      {insight.messageCount > 0 && orderCount === 0 ? (
+      {isSampleMode ? (
+        <Banner tone="info" title="Sample data — showing a demo recovery plan">
+          <p>
+            Your store has no customer questions yet. This dashboard shows example data so you
+            can explore the full recovery workflow. Import real questions to see your actual opportunities.
+          </p>
+          <InlineStack gap="200">
+            <Button url="/app/import" variant="primary">Import Customer Questions</Button>
+          </InlineStack>
+        </Banner>
+      ) : null}
+      {!isSampleMode && insight.messageCount > 0 && orderCount === 0 ? (
         <Banner tone="info" title="Connect order history to unlock revenue estimates">
           <p>Sync your orders so we can show you exactly how much revenue each customer question is costing you.</p>
           <InlineStack gap="200">

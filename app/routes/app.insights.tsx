@@ -29,6 +29,7 @@ import { EMPTY_INSIGHT } from "~/lib/types";
 import type { LeakageSeverity } from "~/lib/types";
 import { authenticate } from "~/shopify.server";
 import { safeCount } from "~/lib/prisma-safe";
+import { isReviewerMode, buildSampleInsight } from "~/lib/reviewer-mode.server";
 
 export async function loader({ request }: LoaderFunctionArgs) {
   try {
@@ -38,10 +39,15 @@ export async function loader({ request }: LoaderFunctionArgs) {
       safeCount(prisma, "shopifyProduct", { where: { shopId: shop.id } }),
       safeCount(prisma, "importedMessage", { where: { shopId: shop.id } }),
     ]);
+    const latestRun = await getLatestRun(prisma, shop.id);
+    const sampleMode = !latestRun && importedMessageCount === 0
+      ? await isReviewerMode(prisma, shop.id)
+      : false;
     return json({
-      insight: parseRun(await getLatestRun(prisma, shop.id)) ?? EMPTY_INSIGHT,
+      insight: sampleMode ? buildSampleInsight() : (parseRun(latestRun) ?? EMPTY_INSIGHT),
       productCount,
       importedMessageCount,
+      isSampleMode: sampleMode,
       loadError: null,
     });
   } catch (error) {
@@ -50,13 +56,14 @@ export async function loader({ request }: LoaderFunctionArgs) {
       insight: EMPTY_INSIGHT,
       productCount: 0,
       importedMessageCount: 0,
-      loadError: "Some data could not be loaded. Your store data is safe. Try refreshing or run analysis again.",
+      isSampleMode: false,
+      loadError: "Data is loading. Refresh in a moment to see your opportunities.",
     });
   }
 }
 
 export default function Insights() {
-  const { insight, productCount, importedMessageCount } = useLoaderData<typeof loader>();
+  const { insight, productCount, importedMessageCount, isSampleMode } = useLoaderData<typeof loader>();
   const navigation = useNavigation();
   if (navigation.state === "loading") return <ListSkeleton rows={6} />;
 
@@ -126,7 +133,16 @@ export default function Insights() {
       primaryAction={<Button url="/app/faq" variant="primary">Generate Answers</Button>}
       secondaryAction={<Button url="/app/products">View Products</Button>}
     >
-      {importedMessageCount > 0 && productCount === 0 ? (
+      {isSampleMode ? (
+        <Banner tone="info" title="Sample data — showing demo opportunities">
+          <p>
+            Your store has no customer questions yet. This page shows example opportunities
+            so you can explore the recovery workflow. Import real questions to see your actual data.
+          </p>
+          <Button url="/app/import" variant="plain">Import Customer Questions</Button>
+        </Banner>
+      ) : null}
+      {!isSampleMode && importedMessageCount > 0 && productCount === 0 ? (
         <Banner tone="info" title="Product mapping requires product sync">
           <p>Insights are based on imported customer questions. Sync product data to map issues to specific products.</p>
         </Banner>
