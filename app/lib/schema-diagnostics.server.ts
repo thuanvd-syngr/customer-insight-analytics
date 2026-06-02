@@ -6,17 +6,21 @@ export type ShopifyProductSchemaDiagnostics = {
   dbColumns: string[];
   clientFields: string[];
   hasTags: boolean;
+  hasVendor: boolean;
   hasProductType: boolean;
+  hasShopifyUpdatedAt: boolean;
   hasCollections: boolean;
   clientHasTags: boolean;
+  clientHasVendor: boolean;
   clientHasProductType: boolean;
+  clientHasShopifyUpdatedAt: boolean;
   clientHasCollections: boolean;
   compatibilityMode: boolean;
   migrationVersion: string | null;
   error?: string;
 };
 
-const OPTIONAL_COLUMNS = ["tags", "productType", "collections"] as const;
+const OPTIONAL_COLUMNS = ["tags", "vendor", "productType", "shopifyUpdatedAt", "collections"] as const;
 
 function clientFieldsForShopifyProduct(): string[] {
   const model = Prisma.dmmf.datamodel.models.find((item) => item.name === "ShopifyProduct");
@@ -44,10 +48,14 @@ export async function getShopifyProductSchemaDiagnostics(
     `.catch(() => []);
     const dbColumns = rows.map((row) => row.column_name);
     const hasTags = dbColumns.includes("tags");
+    const hasVendor = dbColumns.includes("vendor");
     const hasProductType = dbColumns.includes("productType");
+    const hasShopifyUpdatedAt = dbColumns.includes("shopifyUpdatedAt");
     const hasCollections = dbColumns.includes("collections");
     const clientHasTags = clientFields.includes("tags");
+    const clientHasVendor = clientFields.includes("vendor");
     const clientHasProductType = clientFields.includes("productType");
+    const clientHasShopifyUpdatedAt = clientFields.includes("shopifyUpdatedAt");
     const clientHasCollections = clientFields.includes("collections");
     const compatibilityMode =
       !delegateAvailable ||
@@ -58,10 +66,14 @@ export async function getShopifyProductSchemaDiagnostics(
       dbColumns,
       clientFields,
       hasTags,
+      hasVendor,
       hasProductType,
+      hasShopifyUpdatedAt,
       hasCollections,
       clientHasTags,
+      clientHasVendor,
       clientHasProductType,
+      clientHasShopifyUpdatedAt,
       clientHasCollections,
       compatibilityMode,
       migrationVersion: migrations[0]?.finished_at ? migrations[0].migration_name : null,
@@ -72,10 +84,14 @@ export async function getShopifyProductSchemaDiagnostics(
       dbColumns: [],
       clientFields,
       hasTags: false,
+      hasVendor: false,
       hasProductType: false,
+      hasShopifyUpdatedAt: false,
       hasCollections: false,
       clientHasTags: clientFields.includes("tags"),
+      clientHasVendor: clientFields.includes("vendor"),
       clientHasProductType: clientFields.includes("productType"),
+      clientHasShopifyUpdatedAt: clientFields.includes("shopifyUpdatedAt"),
       clientHasCollections: clientFields.includes("collections"),
       compatibilityMode: true,
       migrationVersion: null,
@@ -88,7 +104,9 @@ export async function verifyShopifyProductSchema(db: PrismaClient): Promise<Shop
   const diagnostics = await getShopifyProductSchemaDiagnostics(db);
   console.info("ShopifyProduct columns", {
     tags: diagnostics.hasTags,
+    vendor: diagnostics.hasVendor,
     productType: diagnostics.hasProductType,
+    shopifyUpdatedAt: diagnostics.hasShopifyUpdatedAt,
     collections: diagnostics.hasCollections,
   });
   if (diagnostics.compatibilityMode) {
@@ -96,7 +114,9 @@ export async function verifyShopifyProductSchema(db: PrismaClient): Promise<Shop
       delegateAvailable: diagnostics.delegateAvailable,
       migrationVersion: diagnostics.migrationVersion,
       clientHasTags: diagnostics.clientHasTags,
+      clientHasVendor: diagnostics.clientHasVendor,
       clientHasProductType: diagnostics.clientHasProductType,
+      clientHasShopifyUpdatedAt: diagnostics.clientHasShopifyUpdatedAt,
       clientHasCollections: diagnostics.clientHasCollections,
       error: diagnostics.error,
     });

@@ -53,8 +53,10 @@ export interface ProductInput {
   title: string;
   description?: string;
   handle?: string;
+  vendor?: string | null;
   tags?: string[];
   productType?: string | null;
+  updatedAt?: Date | string | null;
   collections?: string[];
 }
 

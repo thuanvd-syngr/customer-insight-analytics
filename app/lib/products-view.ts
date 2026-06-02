@@ -20,3 +20,7 @@ export function getProductsPageState(input: {
   if (input.insightRunCount === 0) return "needs_analysis";
   return "no_findings";
 }
+
+export function shouldShowSyncedProducts(input: { shopifyProductCount: number }): boolean {
+  return input.shopifyProductCount > 0;
+}

@@ -214,9 +214,11 @@ model ShopifyProduct {
   title       String
   handle      String?
   description String?
+  vendor      String?
   tags        String?
   productType String?
   collections String?
+  shopifyUpdatedAt DateTime?
   rawJson     String?
   syncedAt    DateTime @default(now())
   createdAt   DateTime @default(now())

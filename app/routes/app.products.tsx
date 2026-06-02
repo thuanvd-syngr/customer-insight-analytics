@@ -1,7 +1,7 @@
 import type { LoaderFunctionArgs } from "@remix-run/node";
 import { json } from "@remix-run/node";
 import { useLoaderData, useNavigation } from "@remix-run/react";
-import { Badge, BlockStack, Button, InlineStack, Text } from "@shopify/polaris";
+import { Badge, BlockStack, Button, Card, Text } from "@shopify/polaris";
 
 import {
   AppPage,
@@ -14,11 +14,33 @@ import {
   SectionHeader,
 } from "~/components";
 import prisma from "~/db.server";
-import { getProductsPageState } from "~/lib/products-view";
+import { getProductsPageState, shouldShowSyncedProducts } from "~/lib/products-view";
 import { safeCount } from "~/lib/prisma-safe";
 import { ensureShop, getLatestRun, parseRun } from "~/lib/shop.server";
 import { EMPTY_INSIGHT } from "~/lib/types";
 import { authenticate } from "~/shopify.server";
+
+type SyncedProductRow = {
+  id: string;
+  externalId: string;
+  title: string;
+  handle: string | null;
+  vendor: string | null;
+  productType: string | null;
+  syncedAt: string;
+  shopifyUpdatedAt: string | null;
+  hasDescription: boolean;
+};
+
+function formatDateTime(value: string | null): string {
+  if (!value) return "Unknown";
+  return new Intl.DateTimeFormat("en", {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(value));
+}
 
 export async function loader({ request }: LoaderFunctionArgs) {
   try {
@@ -28,15 +50,42 @@ export async function loader({ request }: LoaderFunctionArgs) {
     const debugMode = url.searchParams.get("debug");
     const showAnalysisDebug = debugMode === "analysis" && process.env.NODE_ENV !== "production";
     const showFindingsDebug = debugMode === "findings" && process.env.NODE_ENV !== "production";
-    const [latestRun, shopifyProductCount, productFindingCount, insightRunCount, importedMessageCount, keywordFindingCount] = await Promise.all([
+    const [latestRun, shopifyProductCount, productFindingCount, insightRunCount, importedMessageCount, keywordFindingCount, syncedProducts] = await Promise.all([
       getLatestRun(prisma, shop.id),
       safeCount(prisma, "shopifyProduct", { where: { shopId: shop.id } }),
       safeCount(prisma, "productFinding", { where: { shopId: shop.id } }),
       safeCount(prisma, "insightRun", { where: { shopId: shop.id, status: "completed" } }),
       safeCount(prisma, "importedMessage", { where: { shopId: shop.id } }),
       safeCount(prisma, "keywordFinding", { where: { shopId: shop.id } }),
+      prisma.shopifyProduct.findMany({
+        where: { shopId: shop.id },
+        orderBy: [{ syncedAt: "desc" }, { title: "asc" }],
+        take: 1000,
+        select: {
+          id: true,
+          externalId: true,
+          title: true,
+          handle: true,
+          vendor: true,
+          productType: true,
+          description: true,
+          syncedAt: true,
+          shopifyUpdatedAt: true,
+        },
+      }),
     ]);
     const insight = parseRun(latestRun) ?? EMPTY_INSIGHT;
+    const syncedProductRows: SyncedProductRow[] = syncedProducts.map((product) => ({
+      id: product.id,
+      externalId: product.externalId,
+      title: product.title,
+      handle: product.handle,
+      vendor: product.vendor,
+      productType: product.productType,
+      syncedAt: product.syncedAt.toISOString(),
+      shopifyUpdatedAt: product.shopifyUpdatedAt?.toISOString() ?? null,
+      hasDescription: Boolean(product.description?.trim()),
+    }));
 
     // Latest generated finding payload (from summaryJson snapshot)
     const latestGeneratedFinding = insight.contentGaps.length > 0
@@ -108,9 +157,12 @@ export async function loader({ request }: LoaderFunctionArgs) {
       insightRunCount,
       importedMessageCount,
       contentGapCount: insight.contentGaps.length,
+      firstProducts: syncedProductRows.slice(0, 5).map((product) => product.title),
+      latestSyncedAt: syncedProductRows[0]?.syncedAt ?? null,
     });
     return json({
       insight,
+      syncedProducts: syncedProductRows,
       shopifyProductCount,
       productFindingCount,
       insightRunCount,
@@ -128,6 +180,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       productFindingCount: 0,
       insightRunCount: 0,
       importedMessageCount: 0,
+      syncedProducts: [],
       lastAnalysisTimestamp: null,
       analysisDebug: null,
       revenueDebug: null,
@@ -139,6 +192,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
 export default function Products() {
   const {
     insight,
+    syncedProducts,
     shopifyProductCount,
     productFindingCount,
     insightRunCount,
@@ -149,6 +203,9 @@ export default function Products() {
   const navigation = useNavigation();
   if (navigation.state === "loading") return <ListSkeleton />;
 
+  const visibleSyncedProducts = syncedProducts.filter(
+    (product): product is NonNullable<typeof product> => product !== null,
+  );
   const products = [...insight.productConfusion].sort(
     (a, b) => b.confusionScore - a.confusionScore,
   );
@@ -178,6 +235,9 @@ export default function Products() {
     );
   const gapByProduct = new Map(
     insight.contentGaps.map((gap) => [gap.productId ?? gap.productTitle, gap]),
+  );
+  const gapByProductTitle = new Map(
+    insight.contentGaps.map((gap) => [gap.productTitle.toLowerCase(), gap]),
   );
 
   // Storewide revenue total — consistent with Dashboard and Reports.
@@ -243,21 +303,97 @@ export default function Products() {
             actionLabel="Open data hub"
             actionUrl="/app/import"
           />
-        ) : pageState === "needs_analysis" ? (
+        ) : null}
+
+        {shouldShowSyncedProducts({ shopifyProductCount }) ? (
+          <Card>
+            <BlockStack gap="300">
+              <SectionHeader
+                title="Synced products"
+                description={pageState === "recovery"
+                  ? "Products synced from Shopify. Recovery status is based on analysis and product-specific customer questions."
+                  : `${formatNumber(shopifyProductCount)} products synced. No product-specific recovery gaps detected yet.`}
+                trailing={<Badge tone="success">{`${formatNumber(shopifyProductCount)} synced`}</Badge>}
+              />
+              {pageState !== "recovery" ? (
+                <Text as="p" variant="bodyMd" tone="subdued">
+                  Storewide insights can be generated from general questions. Product-specific gaps require customer questions linked to products. Synced products are still available below.
+                </Text>
+              ) : null}
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr>
+                      {["Product", "Vendor", "Type", "Last synced", "Description status", "Recovery status", "Action"].map((heading) => (
+                        <th key={heading} style={{ textAlign: "left", padding: "10px 8px", borderBottom: "1px solid #dfe3e8" }}>
+                          <Text as="span" variant="bodySm" tone="subdued">{heading}</Text>
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {visibleSyncedProducts.map((product) => {
+                      const gap = gapByProduct.get(product.externalId) ?? gapByProductTitle.get(product.title.toLowerCase());
+                      const detailUrl = gap
+                        ? `/app/products/${encodeURIComponent(product.externalId)}`
+                        : "/app/import";
+                      return (
+                        <tr key={product.id}>
+                          <td style={{ padding: "12px 8px", borderBottom: "1px solid #eef0f2", minWidth: 220 }}>
+                            <BlockStack gap="050">
+                              <Text as="span" variant="bodyMd">{product.title}</Text>
+                              {product.handle ? (
+                                <Text as="span" variant="bodySm" tone="subdued">{product.handle}</Text>
+                              ) : null}
+                            </BlockStack>
+                          </td>
+                          <td style={{ padding: "12px 8px", borderBottom: "1px solid #eef0f2" }}>
+                            <Text as="span" variant="bodyMd">{product.vendor ?? "Not set"}</Text>
+                          </td>
+                          <td style={{ padding: "12px 8px", borderBottom: "1px solid #eef0f2" }}>
+                            <Text as="span" variant="bodyMd">{product.productType ?? "Not set"}</Text>
+                          </td>
+                          <td style={{ padding: "12px 8px", borderBottom: "1px solid #eef0f2", minWidth: 130 }}>
+                            <Text as="span" variant="bodyMd">{formatDateTime(product.syncedAt)}</Text>
+                          </td>
+                          <td style={{ padding: "12px 8px", borderBottom: "1px solid #eef0f2" }}>
+                            <Badge tone={product.hasDescription ? "success" : "warning"}>
+                              {product.hasDescription ? "Has description" : "Missing description"}
+                            </Badge>
+                          </td>
+                          <td style={{ padding: "12px 8px", borderBottom: "1px solid #eef0f2", minWidth: 180 }}>
+                            <Badge tone={gap ? "warning" : "info"}>
+                              {gap ? "Recovery gap detected" : "No product-specific gap"}
+                            </Badge>
+                          </td>
+                          <td style={{ padding: "12px 8px", borderBottom: "1px solid #eef0f2" }}>
+                            <Button url={detailUrl}>{gap ? "Open" : "Run analysis"}</Button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </BlockStack>
+          </Card>
+        ) : null}
+
+        {pageState === "needs_analysis" ? (
           <EmptyStateCard
             title="Products synced successfully"
-            body="Run analysis to generate recovery opportunities."
+            body="Run analysis to generate storewide insights. Product-specific gaps appear after customer questions are linked to products."
             actionLabel="Run analysis"
             actionUrl="/app/import"
           />
         ) : pageState === "no_findings" ? (
           <EmptyStateCard
-            title="Products synced. No product-specific recovery gaps detected yet."
-            body="Storewide issues (shipping, payment, returns) are available in Insights. Import product-specific customer questions to surface per-product recovery opportunities."
+            title="No product-specific recovery gaps detected yet"
+            body="Storewide insights can be generated from general questions. Product-specific gaps require customer questions linked to products."
             actionLabel="View storewide insights"
             actionUrl="/app/insights"
           />
-        ) : (
+        ) : pageState === "recovery" ? (
           <>
             {(() => {
               // Prefer direct-confusion products when available; fall back to
@@ -340,7 +476,7 @@ export default function Products() {
               );
             })()}
           </>
-        )}
+        ) : null}
       </BlockStack>
     </AppPage>
   );

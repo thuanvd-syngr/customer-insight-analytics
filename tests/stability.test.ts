@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { getUsageSnapshot } from "~/lib/billing";
 import { getDelegate, safeCount } from "~/lib/prisma-safe";
 import { syncShopifyData, type AdminLike } from "~/lib/shopify-data.server";
-import { productSyncStatusText } from "~/lib/sync-status";
+import { orderSyncStatusText, productSyncStatusText } from "~/lib/sync-status";
 
 function jsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -51,6 +51,8 @@ function productAdmin(): AdminLike {
                 id: "gid://shopify/Product/1",
                 title: "Hoodie",
                 handle: "hoodie",
+                vendor: "IndexBoost",
+                updatedAt: "2026-06-01T00:00:00Z",
                 descriptionHtml: "Soft cotton hoodie",
                 tags: ["winter"],
                 productType: "Apparel",
@@ -90,6 +92,8 @@ describe("stability fallbacks", () => {
                   id: "gid://shopify/Product/1",
                   title: "Hoodie",
                   handle: "hoodie",
+                  vendor: "IndexBoost",
+                  updatedAt: "2026-06-01T00:00:00Z",
                   descriptionHtml: "Soft cotton hoodie",
                   tags: ["winter"],
                   productType: "Apparel",
@@ -168,9 +172,11 @@ describe("stability fallbacks", () => {
   });
 
   it.each([
-    ["tags", ["productType", "collections"]],
-    ["productType", ["tags", "collections"]],
-    ["collections", ["tags", "productType"]],
+    ["tags", ["vendor", "productType", "shopifyUpdatedAt", "collections"]],
+    ["vendor", ["tags", "productType", "shopifyUpdatedAt", "collections"]],
+    ["productType", ["tags", "vendor", "shopifyUpdatedAt", "collections"]],
+    ["shopifyUpdatedAt", ["tags", "vendor", "productType", "collections"]],
+    ["collections", ["tags", "vendor", "productType", "shopifyUpdatedAt"]],
   ])("imports products when %s column is missing", async (missingColumn, columns) => {
     const db = dbWithProductColumns(columns);
     const result = await syncShopifyData(db, "shop_1", productAdmin());
@@ -179,8 +185,20 @@ describe("stability fallbacks", () => {
     expect(result.products.ok).toBe(true);
     expect(result.products.count).toBe(1);
     expect(upsertArgs.update.title).toBe("Hoodie");
+    if (missingColumn !== "vendor") expect(upsertArgs.update.vendor).toBe("IndexBoost");
+    if (missingColumn !== "shopifyUpdatedAt") expect(upsertArgs.update.shopifyUpdatedAt).toEqual(new Date("2026-06-01T00:00:00Z"));
     expect(upsertArgs.update).not.toHaveProperty(missingColumn);
     expect(upsertArgs.create).not.toHaveProperty(missingColumn);
+  });
+
+  it("shows a clear order reason when read_orders is missing", async () => {
+    const db = dbWithProductColumns(["tags", "vendor", "productType", "shopifyUpdatedAt", "collections"]);
+    const result = await syncShopifyData(db, "shop_1", productAdmin(), { grantedScopes: "read_products,read_content" });
+
+    expect(result.orders.skipped).toBe(true);
+    expect(result.orders.reason).toContain("re-installing the app");
+    expect(orderSyncStatusText(result.orders)).toContain("re-installing the app");
+    expect(productSyncStatusText(result.products)).toBe("Synced 1 products");
   });
 
   it("returns safe fallbacks when Prisma delegates are missing", async () => {

@@ -259,6 +259,8 @@ export async function action({ request }: ActionFunctionArgs) {
           id: product.externalId,
           title: product.title,
           handle: product.handle ?? undefined,
+          vendor: product.vendor,
+          updatedAt: product.shopifyUpdatedAt,
           description: product.description ?? "",
           tags: parseStringArray(product.tags),
           productType: product.productType,

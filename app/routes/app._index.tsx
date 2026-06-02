@@ -42,7 +42,10 @@ export async function action({ request }: ActionFunctionArgs) {
       return json({ ok: false as const, error: "Unknown intent" });
     }
     const shop = await ensureShop(prisma, session.shop);
-    const autoSync = await syncShopifyData(prisma, shop.id, admin);
+    const autoSync = await syncShopifyData(prisma, shop.id, admin, {
+      shopDomain: shop.shopDomain,
+      grantedScopes: session.scope,
+    });
     const [stored, storedProducts, settings, totalProductCount] = await Promise.all([
       prisma.importedMessage.findMany({
         where: { shopId: shop.id },
@@ -72,6 +75,8 @@ export async function action({ request }: ActionFunctionArgs) {
           id: p.externalId,
           title: p.title,
           handle: p.handle ?? undefined,
+          vendor: p.vendor,
+          updatedAt: p.shopifyUpdatedAt,
           description: p.description ?? "",
           tags: parseStringArray(p.tags),
           productType: p.productType,

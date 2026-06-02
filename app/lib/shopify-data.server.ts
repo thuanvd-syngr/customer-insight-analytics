@@ -45,8 +45,10 @@ type ShopifyProductWriteData = {
   description: string;
   rawJson: string;
   syncedAt: Date;
+  vendor?: string | null;
   tags?: string;
   productType?: string | null;
+  shopifyUpdatedAt?: Date | null;
   collections?: string;
 };
 
@@ -56,6 +58,13 @@ function errorMessage(error: unknown): string {
 
 function isAccessError(error: unknown): boolean {
   return /(access|approved|protected|permission|scope|customer object)/i.test(errorMessage(error));
+}
+
+function hasScope(grantedScopes: string | null | undefined, scope: string): boolean {
+  return (grantedScopes ?? "")
+    .split(",")
+    .map((item) => item.trim())
+    .includes(scope);
 }
 
 function friendlyProductSyncError(error: unknown): string {
@@ -141,6 +150,8 @@ export async function fetchProducts(
           id
           title
           handle
+          vendor
+          updatedAt
           descriptionHtml
           tags
           productType
@@ -158,6 +169,8 @@ export async function fetchProducts(
     id: product.id,
     title: product.title,
     handle: product.handle ?? undefined,
+    vendor: product.vendor ?? null,
+    updatedAt: product.updatedAt ?? null,
     description: product.descriptionHtml ?? "",
     tags: product.tags ?? [],
     productType: product.productType ?? null,
@@ -175,6 +188,8 @@ interface ShopifyProductNode {
   id: string;
   title: string;
   handle?: string | null;
+  vendor?: string | null;
+  updatedAt?: string | null;
   descriptionHtml?: string | null;
   tags?: string[] | null;
   productType?: string | null;
@@ -279,13 +294,17 @@ export async function syncShopifyData(
   try {
     const schema = await getShopifyProductSchemaDiagnostics(db);
     const includeTags = schema.hasTags && schema.clientHasTags;
+    const includeVendor = schema.hasVendor && schema.clientHasVendor;
     const includeProductType = schema.hasProductType && schema.clientHasProductType;
+    const includeShopifyUpdatedAt = schema.hasShopifyUpdatedAt && schema.clientHasShopifyUpdatedAt;
     const includeCollections = schema.hasCollections && schema.clientHasCollections;
     if (schema.compatibilityMode) {
       console.warn("Schema mismatch detected. Running compatibility mode.", {
         shop: opts.shopDomain,
         tags: includeTags,
+        vendor: includeVendor,
         productType: includeProductType,
+        shopifyUpdatedAt: includeShopifyUpdatedAt,
         collections: includeCollections,
         migrationVersion: schema.migrationVersion,
       });
@@ -313,7 +332,9 @@ export async function syncShopifyData(
           syncedAt: now,
         };
         if (includeTags) writeData.tags = JSON.stringify(product.tags ?? []);
+        if (includeVendor) writeData.vendor = product.vendor ?? null;
         if (includeProductType) writeData.productType = product.productType ?? null;
+        if (includeShopifyUpdatedAt) writeData.shopifyUpdatedAt = product.updatedAt ? new Date(product.updatedAt) : null;
         if (includeCollections) writeData.collections = JSON.stringify(product.collections ?? []);
         return upsertProduct({
           where: { shopId_externalId: { shopId, externalId: product.id ?? product.title } },
@@ -337,37 +358,50 @@ export async function syncShopifyData(
 
   let orders: ShopifyOrderNode[] = [];
   try {
-    orders = await fetchOrderSnapshots(admin, { first: 100, limit: 1000 });
-    if (!shopifyOrder?.upsert) {
-      result.orders = { ok: false, count: 0, skipped: true, reason: "Order storage unavailable" };
+    if (!hasScope(opts.grantedScopes, "read_orders")) {
+      result.orders = {
+        ok: false,
+        count: 0,
+        skipped: true,
+        reason: "Orders could not be synced because Shopify requires re-installing the app after scope changes.",
+      };
     } else {
-      const upsertOrder = shopifyOrder.upsert.bind(shopifyOrder);
-      await processInBatches(orders, 50, (order) =>
-        upsertOrder({
-          where: { shopId_externalId: { shopId, externalId: order.id } },
-          update: {
-            name: order.name,
-            note: order.note,
-            customerRef: null,
-            tags: JSON.stringify(order.tags ?? []),
-            processedAt: order.processedAt ? new Date(order.processedAt) : new Date(order.createdAt),
-            rawJson: JSON.stringify(order),
-            syncedAt: now,
-          },
-          create: {
-            shopId,
-            externalId: order.id,
-            name: order.name,
-            note: order.note,
-            customerRef: null,
-            tags: JSON.stringify(order.tags ?? []),
-            processedAt: order.processedAt ? new Date(order.processedAt) : new Date(order.createdAt),
-            rawJson: JSON.stringify(order),
-            syncedAt: now,
-          },
-        }),
-      );
-      result.orders = { ok: true, count: orders.length };
+      orders = await fetchOrderSnapshots(admin, { first: 100, limit: 1000 });
+      if (!shopifyOrder?.upsert) {
+        result.orders = { ok: false, count: 0, skipped: true, reason: "Order storage unavailable" };
+      } else {
+        const upsertOrder = shopifyOrder.upsert.bind(shopifyOrder);
+        await processInBatches(orders, 50, (order) =>
+          upsertOrder({
+            where: { shopId_externalId: { shopId, externalId: order.id } },
+            update: {
+              name: order.name,
+              note: order.note,
+              customerRef: null,
+              tags: JSON.stringify(order.tags ?? []),
+              processedAt: order.processedAt ? new Date(order.processedAt) : new Date(order.createdAt),
+              rawJson: JSON.stringify(order),
+              syncedAt: now,
+            },
+            create: {
+              shopId,
+              externalId: order.id,
+              name: order.name,
+              note: order.note,
+              customerRef: null,
+              tags: JSON.stringify(order.tags ?? []),
+              processedAt: order.processedAt ? new Date(order.processedAt) : new Date(order.createdAt),
+              rawJson: JSON.stringify(order),
+              syncedAt: now,
+            },
+          }),
+        );
+        result.orders = {
+          ok: true,
+          count: orders.length,
+          reason: orders.length === 0 ? "No orders found in this dev store." : undefined,
+        };
+      }
     }
   } catch (error) {
     result.orders = {
@@ -375,7 +409,9 @@ export async function syncShopifyData(
       count: 0,
       error: errorMessage(error),
       skipped: isAccessError(error),
-      reason: isAccessError(error) ? "Order access unavailable" : undefined,
+      reason: isAccessError(error)
+        ? "Orders could not be synced because Shopify requires re-installing the app after scope changes."
+        : undefined,
     };
   }
 
