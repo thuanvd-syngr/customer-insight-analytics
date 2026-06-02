@@ -60,6 +60,11 @@ model Shop {
   bulkJobs             BulkJob[]
   emailReportLogs      EmailReportLog[]
   productOptDrafts     ProductOptimizationDraft[]
+  copilotMessages      CopilotMessage[]
+  contentLibraryItems  ContentLibraryItem[]
+  revenueEvents        RevenueEvent[]
+  autoPublishRules     AutoPublishRule[]
+  marketingAssets      MarketingAsset[]
 
   @@index([shopDomain])
 }
@@ -457,6 +462,110 @@ model ProductOptimizationDraft {
   updatedAt       DateTime  @updatedAt
 
   @@index([shopId, productId])
+  @@index([shopId, status])
+}
+
+/// Phase 12 — AI Revenue Copilot message log.
+/// role: user | assistant
+model CopilotMessage {
+  id         String   @id @default(cuid())
+  shopId     String
+  shop       Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  role       String   // user | assistant
+  content    String
+  context    String?  // JSON insight snapshot used for this response
+  sessionRef String?  // client-generated session grouping key
+  topic      String?  // detected topic: shipping | returns | competitors | revenue | content | faq | analytics | general
+  confidence Int      @default(0) // 0-100 response confidence
+  createdAt  DateTime @default(now())
+
+  @@index([shopId, createdAt])
+  @@index([shopId, sessionRef])
+}
+
+/// Phase 12 — Recovery Content Library item.
+/// itemType: faq | blog_tip | page_template | email_snippet | social_post
+model ContentLibraryItem {
+  id         String   @id @default(cuid())
+  shopId     String
+  shop       Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  itemType   String   // faq | blog_tip | page_template | email_snippet | social_post
+  title      String
+  content    String
+  tags       String?  // JSON array of tag strings
+  groupId    String?  // friction group reference
+  productId  String?  // shopify product gid
+  source     String   @default("generated") // generated | manual | imported
+  status     String   @default("active")    // active | archived
+  usageCount Int      @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([shopId, itemType])
+  @@index([shopId, status])
+  @@index([shopId, groupId])
+}
+
+/// Phase 12 — Revenue recovery timeline event.
+/// eventType: content_published | faq_created | insight_run | competitor_resolved | bulk_job
+model RevenueEvent {
+  id           String   @id @default(cuid())
+  shopId       String
+  shop         Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  eventType    String   // content_published | faq_created | insight_run | competitor_resolved | bulk_job | manual
+  description  String
+  refId        String?  // source record id
+  refType      String?  // published_content | generated_faq | bulk_job
+  lowEstimate  Float    @default(0)
+  highEstimate Float    @default(0)
+  actualValue  Float?   // manually confirmed actual recovery
+  occurredAt   DateTime @default(now())
+  createdAt    DateTime @default(now())
+
+  @@index([shopId, occurredAt])
+  @@index([shopId, eventType])
+}
+
+/// Phase 12 — Auto-publish rule configuration.
+/// ruleType: faq | blog | page
+model AutoPublishRule {
+  id         String    @id @default(cuid())
+  shopId     String
+  shop       Shop      @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  ruleType   String    // faq | blog | page
+  trigger    String    // on_insight | on_threshold | manual
+  conditions String?   // JSON: { minSeverity, minMentions, groupIds, maxPerRun }
+  enabled    Boolean   @default(false)
+  lastRunAt  DateTime?
+  totalRuns  Int       @default(0)
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@unique([shopId, ruleType])
+  @@index([shopId, enabled])
+}
+
+/// Phase 12 — Marketing asset generated for store promotion.
+/// assetType: social_post | email_subject | ad_copy | review_request | sms_snippet
+model MarketingAsset {
+  id         String   @id @default(cuid())
+  shopId     String
+  shop       Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  assetType  String   // social_post | email_subject | ad_copy | review_request | sms_snippet
+  platform   String   // instagram | facebook | email | google_ads | sms | generic
+  content    String
+  headline   String?
+  cta        String?
+  productId  String?
+  groupId    String?
+  tone       String   @default("professional") // professional | friendly | urgent | empathetic
+  status     String   @default("draft")        // draft | used | archived
+  usageCount Int      @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([shopId, assetType])
+  @@index([shopId, platform])
   @@index([shopId, status])
 }
 

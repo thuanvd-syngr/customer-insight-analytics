@@ -1,0 +1,16 @@
+api_version = "2026-01"
+
+[[extensions]]
+name = "Customer Insight — Optimize Product"
+handle = "customer-insight-product-link"
+type = "admin_link"
+
+  [extensions.settings]
+  # Link appears on the Shopify Admin product detail page.
+  # Clicking opens the product optimization page in the embedded app.
+  [extensions.metafields]
+
+  [[extensions.targeting]]
+  resource = "product"
+  # The %s is replaced by Shopify with the product GID at runtime.
+  url = "/app/products/{id}/optimize"
