@@ -33,6 +33,7 @@ export default function EmbeddedApp() {
         <a href="/app/publish">Publish</a>
         <a href="/app/bulk">Bulk Actions</a>
         <a href="/app/widget">FAQ Widget</a>
+        <a href="/app/onboarding">Getting Started</a>
         <a href="/app/copilot">AI Copilot</a>
         <a href="/app/library">Content Library</a>
         <a href="/app/roi">Revenue Timeline</a>

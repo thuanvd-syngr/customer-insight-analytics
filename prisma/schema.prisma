@@ -65,6 +65,7 @@ model Shop {
   revenueEvents        RevenueEvent[]
   autoPublishRules     AutoPublishRule[]
   marketingAssets      MarketingAsset[]
+  usageEvents          UsageEvent[]
 
   @@index([shopDomain])
 }
@@ -567,6 +568,23 @@ model MarketingAsset {
   @@index([shopId, assetType])
   @@index([shopId, platform])
   @@index([shopId, status])
+}
+
+/// Phase 13 — Feature usage event for analytics and conversion funnel tracking.
+/// featureId: insight_run | faq_generated | content_published | bulk_job_started |
+///   copilot_used | marketing_generated | competitor_viewed | roi_viewed |
+///   library_viewed | onboarding_completed | billing_upgraded
+model UsageEvent {
+  id         String   @id @default(cuid())
+  shopId     String
+  shop       Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  featureId  String
+  metadata   String?  // JSON: { plan, source, count, etc. }
+  occurredAt DateTime @default(now())
+  createdAt  DateTime @default(now())
+
+  @@index([shopId, featureId])
+  @@index([shopId, occurredAt])
 }
 
 /// Stored weekly recovery email HTML. Provider delivery is intentionally out of scope.
