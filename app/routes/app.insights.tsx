@@ -100,9 +100,9 @@ export default function Insights() {
   if (!hasData) {
     return (
       <AppPage
-        title="Revenue Opportunities"
-        subtitle="Prioritized issues that cost revenue and the fix to create next."
-        primaryAction={<Button url="/app/import" variant="primary">Add customer questions</Button>}
+        title="Lost Sales Opportunities"
+        subtitle="Customer questions blocking purchases — ranked by revenue impact."
+        primaryAction={<Button url="/app/import" variant="primary">Import Customer Questions</Button>}
       >
         {importedMessageCount > 0 && productCount === 0 ? (
           <Banner tone="info" title="Product mapping requires product sync">
@@ -110,9 +110,9 @@ export default function Insights() {
           </Banner>
         ) : null}
         <EmptyStateCard
-          title="Import conversations to discover revenue opportunities"
-          body="Analyze customer questions to identify lost sales, affected customers, and the first fix to create."
-          actionLabel="Open data hub"
+          title="Import customer questions to discover what's costing you sales"
+          body="Analyze buying objections to find lost sales, affected customers, and the answers that recover revenue."
+          actionLabel="Import Customer Questions"
           actionUrl="/app/import"
         />
       </AppPage>
@@ -121,10 +121,10 @@ export default function Insights() {
 
   return (
     <AppPage
-      title="Revenue Opportunities"
-      subtitle="Highest-value buying objections ranked by revenue impact."
-      primaryAction={<Button url="/app/faq" variant="primary">Create Revenue Recovery Content</Button>}
-      secondaryAction={<Button url="/app/products">View products</Button>}
+      title="Lost Sales Opportunities"
+      subtitle="Customer questions blocking purchases — ranked by revenue impact."
+      primaryAction={<Button url="/app/faq" variant="primary">Generate Answers</Button>}
+      secondaryAction={<Button url="/app/products">View Products</Button>}
     >
       {importedMessageCount > 0 && productCount === 0 ? (
         <Banner tone="info" title="Product mapping requires product sync">
@@ -134,25 +134,25 @@ export default function Insights() {
       <BlockStack gap="500">
         <div className="cia-four-grid">
           <KpiCard
-            label="Customers impacted"
+            label="Questions Analyzed"
             value={formatNumber(totalQuestions)}
-            detail={`${opportunities.length} revenue issues`}
+            detail={`${opportunities.length} buying objections found`}
             tone="info"
           />
           <KpiCard
-            label="High priority topics"
+            label="High Priority Issues"
             value={formatNumber(highImpact)}
-            detail="Requires merchant action"
+            detail="Needs your attention now"
             tone={highImpact > 0 ? "warning" : "info"}
           />
           <KpiCard
-            label="Recovery impact"
+            label="Revenue You Could Recover"
             value={recoverableHigh > 0 ? formatMoneyRange(recoverableLow, recoverableHigh) : "Connect orders"}
             detail="Estimated monthly upside if answered"
             tone="success"
           />
           <KpiCard
-            label="Fastest rising topic"
+            label="Fastest Growing Issue"
             value={worstTrend > 0 ? `+${Math.round(worstTrend * 100)}%` : "Stable"}
             detail="Largest 7-day increase"
             tone={worstTrend > 0 ? "warning" : "info"}
@@ -162,8 +162,8 @@ export default function Insights() {
         <div className="cia-section-band">
           <BlockStack gap="300">
             <SectionHeader
-              title="Storewide Opportunities"
-              description="Questions about shipping, payment, delivery, returns, and discounts that apply across the store."
+              title="Questions Blocking Sales"
+              description="Shipping, payment, returns, and delivery questions that stop buyers across your entire store."
             />
             {(storewideOpportunities.length > 0 ? storewideOpportunities : opportunities.filter((item) =>
               ["shipping", "delivery", "payment", "return", "refund", "discount"].includes(item.groupId),
@@ -187,7 +187,7 @@ export default function Insights() {
                   <Text as="span" variant="headingMd" tone={item.highEstimate > 0 ? "success" : "subdued"}>
                     {item.highEstimate > 0 ? `${moneyRange(item.lowEstimate, item.highEstimate)}/mo` : "Connect orders"}
                   </Text>
-                  <Button url="/app/faq" variant={item.severity === "high" ? "primary" : undefined}>Generate Fix</Button>
+                  <Button url="/app/faq" variant={item.severity === "high" ? "primary" : undefined}>Create Answer</Button>
                 </div>
               );
             })}
@@ -197,8 +197,8 @@ export default function Insights() {
         <div className="cia-section-band">
           <BlockStack gap="300">
             <SectionHeader
-              title="Product Opportunities"
-              description="Product-specific gaps only appear when customer questions mention a product title, handle, vendor, or product keywords."
+              title="Products Losing Sales"
+              description="Products where customer questions reveal missing answers. Questions must mention a product name or keyword to appear here."
             />
             {productOpportunities.length > 0 ? (
               productOpportunities.slice(0, 6).map((gap) => (
@@ -218,8 +218,8 @@ export default function Insights() {
                 </div>
               ))
             ) : (
-              <Banner tone="info" title="No product-specific opportunities yet">
-                <p>Storewide opportunities can be generated from general questions. Product opportunities require questions linked to synced products.</p>
+              <Banner tone="info" title="No product-specific questions found yet">
+                <p>Questions Blocking Sales above can be answered first. Product-specific issues appear once customer questions mention your product names.</p>
               </Banner>
             )}
           </BlockStack>
@@ -227,8 +227,8 @@ export default function Insights() {
 
         <BlockStack gap="300">
           <SectionHeader
-            title="Fix Cards"
-            description="Create the exact content needed to recover the sale."
+            title="Recovery Actions"
+            description="Generate the right answer for each buying objection and recover the sale."
           />
           <div className="cia-two-grid">
             {opportunities.map((item) => (

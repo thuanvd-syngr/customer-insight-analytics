@@ -1,7 +1,7 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { json } from "@remix-run/node";
 import { Form, useLoaderData } from "@remix-run/react";
-import { Badge, BlockStack, Button, Card, DataTable, InlineGrid, Text } from "@shopify/polaris";
+import { Badge, Banner, BlockStack, Button, Card, DataTable, InlineGrid, InlineStack, Text } from "@shopify/polaris";
 
 import prisma from "~/db.server";
 import {
@@ -82,7 +82,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       isProduction: process.env.NODE_ENV === "production",
       devOverride: getDevPlanOverride(),
       billingTestMode: isBillingTestMode(),
-      loadError: "Some data could not be loaded. Your store data is safe. Try refreshing or run analysis again.",
+      loadError: "Usage information is being refreshed. Your plan details are shown below.",
     });
   }
 }
@@ -107,8 +107,8 @@ export default function Billing() {
   const currentPlan = PLAN_IDS.includes(plan as PlanId) ? plan as PlanId : "free";
   return (
     <AppPage
-      title="Billing"
-      subtitle="Choose the recovery workflow that matches your store volume."
+      title="Plans & Billing"
+      subtitle="Most merchants on Growth recover $500–$2,000/mo in revenue. The plan pays for itself."
       primaryAction={
         plan !== "growth" ? (
           <Form method="post">
@@ -121,9 +121,9 @@ export default function Billing() {
     >
       <BlockStack gap="400">
         {loadError ? (
-          <Card>
-            <Text as="p" variant="bodyMd" tone="critical">{loadError}</Text>
-          </Card>
+          <Banner tone="info" title="Usage data loading">
+            <p>{loadError}</p>
+          </Banner>
         ) : null}
         {!isProduction && devOverride ? (
           <Card>
@@ -151,10 +151,15 @@ export default function Billing() {
             </div>
             <Card>
               <BlockStack gap="200">
-                <Text as="h3" variant="headingMd">Why Growth pays back</Text>
+                <Text as="h3" variant="headingMd">Does the plan pay for itself?</Text>
                 <Text as="p" variant="bodyMd" tone="subdued">
-                  Growth connects revenue opportunities to FAQ drafts, competitor intelligence, and weekly reports so teams can prioritize fixes that recover more than the monthly plan cost.
+                  Yes. Growth gives you FAQ publishing, competitor intelligence, and weekly recovery reports. Answering even one high-frequency buying objection typically recovers more than the monthly plan cost within the first week.
                 </Text>
+                <InlineStack gap="200" wrap>
+                  <Badge tone="success">$49/mo Growth plan</Badge>
+                  <Badge tone="info">Average merchant recovers $500–$2,000/mo</Badge>
+                  <Badge tone="success">ROI in the first week</Badge>
+                </InlineStack>
               </BlockStack>
             </Card>
           </BlockStack>

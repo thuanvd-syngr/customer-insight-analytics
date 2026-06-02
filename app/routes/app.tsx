@@ -25,23 +25,12 @@ export default function EmbeddedApp() {
   return (
     <AppProvider isEmbeddedApp apiKey={apiKey}>
       <NavMenu>
-        <a href="/app" rel="home">Home</a>
-        <a href="/app/insights">Insights</a>
+        <a href="/app" rel="home">Dashboard</a>
+        <a href="/app/insights">Opportunities</a>
         <a href="/app/products">Products</a>
-        <a href="/app/competitors">Competitors</a>
-        <a href="/app/faq">FAQ</a>
+        <a href="/app/content">Content</a>
         <a href="/app/publish">Publish</a>
-        <a href="/app/bulk">Bulk Actions</a>
-        <a href="/app/widget">FAQ Widget</a>
-        <a href="/app/onboarding">Getting Started</a>
-        <a href="/app/copilot">AI Copilot</a>
-        <a href="/app/library">Content Library</a>
-        <a href="/app/roi">Revenue Timeline</a>
-        <a href="/app/marketing">Marketing Assets</a>
-        <a href="/app/analytics">Analytics V2</a>
-        <a href="/app/import">Import</a>
         <a href="/app/reports">Reports</a>
-        <a href="/app/email/send">Email Reports</a>
         <a href="/app/settings">Settings</a>
         <a href="/app/billing">Billing</a>
       </NavMenu>

@@ -191,17 +191,62 @@ export default function CompetitorsPage() {
     return (
       <AppPage
         title="Competitor Intelligence"
-        subtitle="Find competitors costing you buyers and generate response content."
-        primaryAction={<Button url="/app/import" variant="primary">Add customer questions</Button>}
-        secondaryAction={<Button url="/app/settings">Configure tracking</Button>}
+        subtitle="Detect when customers compare you to rivals — and recover the sale before they leave."
+        primaryAction={<Button url="/app/settings" variant="primary">Add Competitor Names</Button>}
+        secondaryAction={<Button url="/app/import">Import Customer Questions</Button>}
       >
         {loadError ? <Banner tone="critical" title="Load error"><p>{loadError}</p></Banner> : null}
-        <EmptyStateCard
-          title="No competitor mentions detected"
-          body="Add competitor brand names in Settings and import conversations that mention rivals."
-          actionLabel="Configure competitor tracking"
-          actionUrl="/app/settings"
-        />
+        <BlockStack gap="500">
+          <Banner tone="info" title="How competitor tracking works">
+            <p>
+              Add competitor brand names in Settings. When a customer question mentions a rival, it's flagged here
+              with switching risk, revenue at risk, and a suggested answer to keep the buyer.
+            </p>
+          </Banner>
+          <Card>
+            <BlockStack gap="400">
+              <SectionHeader
+                title="Example: What competitor tracking reveals"
+                description="Once you add competitor names, questions like these get flagged automatically."
+              />
+              <div className="cia-metric-strip">
+                <div className="cia-muted-panel">
+                  <div className="cia-eyebrow">Competitor</div>
+                  <Text as="p" variant="headingMd">Burton</Text>
+                  <Text as="p" variant="bodySm" tone="subdued">12 mentions</Text>
+                </div>
+                <div className="cia-muted-panel">
+                  <div className="cia-eyebrow">Competitor</div>
+                  <Text as="p" variant="headingMd">Nitro</Text>
+                  <Text as="p" variant="bodySm" tone="subdued">8 mentions</Text>
+                </div>
+                <div className="cia-muted-panel">
+                  <div className="cia-eyebrow">Competitor</div>
+                  <Text as="p" variant="headingMd">Lib Tech</Text>
+                  <Text as="p" variant="bodySm" tone="subdued">5 mentions</Text>
+                </div>
+                <div className="cia-muted-panel">
+                  <div className="cia-eyebrow">Revenue at Risk</div>
+                  <Text as="p" variant="headingMd">$1,250/mo</Text>
+                  <Text as="p" variant="bodySm" tone="subdued">Estimated</Text>
+                </div>
+              </div>
+              <BlockStack gap="200">
+                <Text as="h3" variant="headingSm">What you can do with this data:</Text>
+                <InlineStack gap="200" wrap>
+                  <Badge tone="info">Detect comparison questions before buyers leave</Badge>
+                  <Badge tone="success">Generate "Why buy from us?" content automatically</Badge>
+                  <Badge tone="warning">Identify products under competitive pressure</Badge>
+                  <Badge tone="info">Publish comparison blog articles to Shopify</Badge>
+                </InlineStack>
+              </BlockStack>
+              <InlineStack gap="200">
+                <Button url="/app/settings" variant="primary">Add Competitor Names in Settings</Button>
+                <Button url="/app/import">Import Customer Questions</Button>
+              </InlineStack>
+            </BlockStack>
+          </Card>
+        </BlockStack>
       </AppPage>
     );
   }
@@ -373,7 +418,7 @@ export default function CompetitorsPage() {
                           {`${formatNumber(product?.mentionCount ?? 0)} mentions · confusion score ${Math.round(product?.confusionScore ?? 0)}/100`}
                         </Text>
                       </BlockStack>
-                      <Button url="/app/faq" size="slim">Generate Fix</Button>
+                      <Button url="/app/faq" size="slim">Create Answer</Button>
                     </InlineStack>
                   </BlockStack>
                 ))}

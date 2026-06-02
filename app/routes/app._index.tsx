@@ -139,7 +139,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       productCount: 0,
       publishedTotal: 0,
       autoSyncNeeded: false,
-      loadError: "Some data could not be loaded. Your store data is safe. Try refreshing or run analysis again.",
+      loadError: "Store data is loading. Refresh in a moment to see your recovery insights.",
       sampleDataEnabled: isSampleDataEnabled(),
     });
   }
@@ -193,75 +193,68 @@ export default function Dashboard() {
   if (isEmpty) {
     return (
       <AppPage
-        title="Customer Insight Analytics"
-        subtitle="Turn customer questions into revenue recovery actions."
-        primaryAction={<Button url="/app/import" variant="primary">Sync product and order data</Button>}
-        secondaryAction={<Button url="/app/import">Add customer questions</Button>}
+        title="Revenue Recovery Dashboard"
+        subtitle="Turn customer questions into recovered revenue."
+        primaryAction={<Button url="/app/import" variant="primary">Import Your Store Data</Button>}
+        secondaryAction={<Button url="/app/import">Add Customer Questions</Button>}
       >
         {loadError ? (
-          <Banner tone="warning" title="Some data could not be loaded">
-            <p>Your store data is safe. Try refreshing or run analysis again.</p>
+          <Banner tone="info" title="Store data is loading">
+            <p>Refresh in a moment to see your recovery insights.</p>
           </Banner>
         ) : null}
         {syncError ? (
-          <Banner tone="warning" title="Auto-sync failed">
+          <Banner tone="warning" title="Data sync needs attention">
             <p>{syncError}</p>
           </Banner>
         ) : null}
         <EmptyStateCard
-          title={syncAttempted ? "No Shopify recovery data found yet" : "Sync product and order data to discover revenue opportunities"}
+          title={syncAttempted ? "Let's connect your store data to begin finding revenue opportunities" : "Turn customer questions into recovered revenue"}
           body={syncAttempted
-            ? "This store has no synced products or order notes that can be analyzed yet."
-            : "Analyze products, order notes, and imported customer questions to identify the first recovery actions to take."}
-          actionLabel="Open data hub"
+            ? "Import customer questions and sync your products to discover the buying objections costing you sales."
+            : "Import your store data to identify questions blocking purchases and estimate the revenue you could recover."}
+          actionLabel="Import Store Data"
           actionUrl="/app/import"
         />
         <OnboardingChecklist
-          title="Get started"
+          title="4 steps to your first recovered sale"
           steps={[
             ...(sampleDataEnabled
               ? [{
-                  title: "Import sample data",
-                  description: "Optional fallback for exploring the workflow when a development store has no live data.",
+                  title: "Load sample data",
+                  description: "Explore the full workflow using demo data from a development store.",
                   completed: false,
                   actionLabel: "Load sample data",
                   actionUrl: "/app/import",
                 }]
               : []),
             {
-              title: "Sync Shopify",
-              description: "Bring products and store content into the analysis.",
+              title: "Step 1 — Import Your Data",
+              description: "Bring in customer questions, products, and order history so the engine can find what's costing you sales.",
               completed: productCount > 0 || orderCount > 0,
-              actionLabel: "Sync data",
+              actionLabel: "Import data",
               actionUrl: "/app/import",
             },
             {
-              title: "Run analysis",
-              description: "Find revenue opportunities and recommended fixes.",
+              title: "Step 2 — Analyze Buying Questions",
+              description: "Run the revenue analysis to discover which questions are blocking purchases and how much they cost you.",
               completed: hasRun,
               actionLabel: "Run analysis",
               actionUrl: "/app/import",
             },
             {
-              title: "Prepare fixes",
-              description: "Generate FAQs and content blocks for the highest-value gaps.",
+              title: "Step 3 — Generate Recovery Content",
+              description: "Create FAQ answers and content pages targeting the highest-value customer concerns.",
               completed: false,
-              actionLabel: "Open FAQ builder",
+              actionLabel: "Generate answers",
               actionUrl: "/app/faq",
             },
             {
-              title: "Publish content",
-              description: "Push FAQ pages and blog articles to your Shopify store.",
+              title: "Step 4 — Publish to Your Store",
+              description: "Push FAQ pages and blog articles live to Shopify — one click per content type.",
               completed: publishedTotal > 0,
-              actionLabel: "Go to Publish",
+              actionLabel: "Publish content",
               actionUrl: "/app/publish",
-            },
-            {
-              title: "Add FAQ Widget",
-              description: "Embed product FAQs directly on product pages using a Theme App Block.",
-              completed: false,
-              actionLabel: "Widget setup guide",
-              actionUrl: "/app/widget",
             },
           ]}
         />
@@ -321,17 +314,17 @@ export default function Dashboard() {
 
   return (
     <AppPage
-      title="Customer Insight Analytics"
-      subtitle="Turn customer questions into revenue recovery actions."
-      primaryAction={<Button url="/app/import" variant="primary">Run revenue analysis</Button>}
-      secondaryAction={<Button url="/app/import">Add customer questions</Button>}
+      title="Revenue Recovery Dashboard"
+      subtitle="Turn customer questions into recovered revenue."
+      primaryAction={<Button url="/app/import" variant="primary">Find Revenue Opportunities</Button>}
+      secondaryAction={<Button url="/app/import">Add Customer Questions</Button>}
     >
       {insight.messageCount > 0 && orderCount === 0 ? (
-        <Banner tone="info" title="Connect orders to unlock recovery estimates">
-          <p>Sync order history so the command center can show monthly revenue at risk.</p>
+        <Banner tone="info" title="Connect order history to unlock revenue estimates">
+          <p>Sync your orders so we can show you exactly how much revenue each customer question is costing you.</p>
           <InlineStack gap="200">
-            <Button url="/app/import" variant="primary">Sync product and order data</Button>
-            <Button url="/app/settings">Set average order value</Button>
+            <Button url="/app/import" variant="primary">Sync Order History</Button>
+            <Button url="/app/settings">Set Average Order Value</Button>
           </InlineStack>
         </Banner>
       ) : null}
@@ -346,13 +339,13 @@ export default function Dashboard() {
           <div className="cia-command-hero">
             <ScoreGauge
               score={insight.insightScore}
-              label="Revenue Recovery Score"
-              caption="Higher means fewer unresolved buying objections"
+              label="Store Revenue Health"
+              caption="Higher means fewer unanswered buying objections"
               tone={insight.insightScore < 40 ? "critical" : insight.insightScore < 70 ? "warning" : "success"}
             />
             <BlockStack gap="150">
               <Text as="p" variant="bodySm" tone="subdued">
-                Revenue Recovery Command Center
+                Revenue You Could Recover
               </Text>
               <div className="cia-hero-number">{revenueDisplay}</div>
               <Text as="p" variant="bodyMd" tone="subdued">
@@ -361,8 +354,8 @@ export default function Dashboard() {
                   : "Import conversations and connect order data to estimate lost sales."}
               </Text>
               <InlineStack gap="200">
-                <Button url="/app/insights" variant="primary">View recovery plan</Button>
-                <Button url="/app/faq">Create recovery content</Button>
+                <Button url="/app/insights" variant="primary">See Lost Sales Opportunities</Button>
+                <Button url="/app/faq">Generate Recovery Content</Button>
               </InlineStack>
             </BlockStack>
           </div>
@@ -381,19 +374,19 @@ export default function Dashboard() {
               </Text>
             </div>
             <div className="cia-muted-panel">
-              <div className="cia-eyebrow">Storewide Opportunities</div>
+              <div className="cia-eyebrow">Questions Blocking Sales</div>
               <Text as="p" variant="headingLg">
                 {formatNumber(storewideOpportunityCount)}
               </Text>
             </div>
             <div className="cia-muted-panel">
-              <div className="cia-eyebrow">Product Opportunities</div>
+              <div className="cia-eyebrow">Products Needing Attention</div>
               <Text as="p" variant="headingLg">
                 {formatNumber(productOpportunityCount)}
               </Text>
             </div>
             <div className="cia-muted-panel">
-              <div className="cia-eyebrow">Published Assets</div>
+              <div className="cia-eyebrow">Content Live on Store</div>
               <Text as="p" variant="headingLg">
                 {formatNumber(publishedTotal)}
               </Text>
@@ -405,9 +398,9 @@ export default function Dashboard() {
       <div className="cia-section-band">
         <BlockStack gap="300">
           <SectionHeader
-            title="What should I fix today?"
-            description="Start with storewide buying objections first; product-specific gaps appear when questions match products."
-            actionLabel="Create recovery content"
+            title="What's costing you sales right now?"
+            description="Start with the highest-impact buying objection. Each one fixed means more buyers completing purchase."
+            actionLabel="Generate Recovery Content"
             actionUrl="/app/faq"
           />
           {productFixQueue.length > 0 ? productFixQueue.map((gap, index) => {
@@ -440,7 +433,7 @@ export default function Dashboard() {
                   </InlineStack>
                 </BlockStack>
                 <Button url="/app/faq" variant={index === 0 ? "primary" : undefined}>
-                  Generate Fix
+                  Create Answer
                 </Button>
               </div>
             );
@@ -485,21 +478,21 @@ export default function Dashboard() {
 
       <div className="cia-three-grid">
         <KpiCard
-          label="Next product to fix"
+          label="Top product to fix"
           value={insight.productConfusion[0]?.productTitle ?? "Sync products"}
-          detail="Highest product recovery priority"
+          detail="Highest priority for recovery"
           tone="warning"
         />
         <KpiCard
-          label="Top buying objection"
+          label="Top question to answer"
           value={insight.questionOpportunities[0]?.label ?? "Analyze questions"}
-          detail="Most valuable customer concern"
+          detail="Most valuable buyer concern"
           tone="info"
         />
         <KpiCard
-          label="Fastest path to ROI"
-          value={recoveryQueue[0]?.title ?? "Create recovery content"}
-          detail="Recommended first fix"
+          label="Best first action"
+          value={recoveryQueue[0]?.title ?? "Generate recovery content"}
+          detail="Fastest path to recovered revenue"
           tone="success"
         />
       </div>

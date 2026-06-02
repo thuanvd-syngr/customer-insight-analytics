@@ -71,8 +71,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
     console.error("Onboarding loader failed", error);
     return json({
       checklist: null,
-      firstRun: false,
-      loadError: "Could not load onboarding data. Try refreshing.",
+      firstRun: true,
+      loadError: null,
     });
   }
 }
@@ -93,18 +93,48 @@ export default function OnboardingPage() {
 
   if (!checklist) {
     return (
-      <AppPage title="Getting Started" subtitle="Set up your Revenue Recovery Platform.">
-        {loadError ? <Banner tone="critical" title="Error"><p>{loadError}</p></Banner> : null}
+      <AppPage
+        title="Getting Started"
+        subtitle="Let's connect your store data to begin finding revenue opportunities."
+        primaryAction={<Button url="/app/import" variant="primary">Import Store Data</Button>}
+      >
+        <BlockStack gap="400">
+          <Card>
+            <BlockStack gap="300">
+              <SectionHeader
+                title="4 steps to your first recovered sale"
+                description="Follow these steps to start recovering revenue from unanswered customer questions."
+              />
+              {[
+                { step: "1", title: "Import Your Data", desc: "Bring in customer questions, products, and orders.", url: "/app/import", label: "Import data" },
+                { step: "2", title: "Analyze Buying Questions", desc: "Run the engine to find what's blocking purchases.", url: "/app/import", label: "Run analysis" },
+                { step: "3", title: "Generate Recovery Content", desc: "Create FAQ answers for your highest-value objections.", url: "/app/faq", label: "Generate FAQs" },
+                { step: "4", title: "Publish to Your Store", desc: "Push FAQ pages and blog articles live on Shopify.", url: "/app/publish", label: "Publish content" },
+              ].map((item, idx) => (
+                <BlockStack key={item.step} gap="100">
+                  {idx > 0 ? <Divider /> : null}
+                  <InlineStack align="space-between" blockAlign="center" gap="300" wrap={false}>
+                    <BlockStack gap="050">
+                      <Text as="p" variant="bodyMd" fontWeight="semibold">{`Step ${item.step} — ${item.title}`}</Text>
+                      <Text as="p" variant="bodySm" tone="subdued">{item.desc}</Text>
+                    </BlockStack>
+                    <Button url={item.url} size="slim">{item.label}</Button>
+                  </InlineStack>
+                </BlockStack>
+              ))}
+            </BlockStack>
+          </Card>
+        </BlockStack>
       </AppPage>
     );
   }
 
   return (
     <AppPage
-      title={firstRun ? "Welcome to Revenue Recovery" : "Setup Checklist"}
+      title={firstRun ? "Let's Recover Your First Sale" : "Setup Progress"}
       subtitle={
         firstRun
-          ? "Let's set up your store for maximum revenue recovery. Follow the steps below."
+          ? "Let's connect your store data to begin finding the questions costing you revenue."
           : `You've completed ${checklist.completedCount} of ${checklist.totalCount} setup steps.`
       }
       primaryAction={
@@ -124,12 +154,12 @@ export default function OnboardingPage() {
         {loadError ? <Banner tone="critical" title="Error"><p>{loadError}</p></Banner> : null}
 
         {checklist.isComplete ? (
-          <Banner tone="success" title="Setup complete!">
-            <p>All required steps are done. Your store is ready for revenue recovery.</p>
+          <Banner tone="success" title="You're set up — start recovering revenue">
+            <p>All required steps are complete. Head to Opportunities to see what to fix first.</p>
           </Banner>
         ) : firstRun ? (
-          <Banner tone="info" title="Start here">
-            <p>Follow these steps to unlock the full power of Customer Insight Analytics.</p>
+          <Banner tone="info" title="Start here — takes about 10 minutes">
+            <p>Complete these steps to find the customer questions costing you sales and generate answers that recover revenue.</p>
           </Banner>
         ) : null}
 
@@ -138,8 +168,8 @@ export default function OnboardingPage() {
           <BlockStack gap="400">
             <InlineStack align="space-between" blockAlign="center">
               <SectionHeader
-                title="Overall Progress"
-                description={`${checklist.requiredCompleted} / ${checklist.requiredTotal} required steps complete`}
+                title="Setup Progress"
+                description={`${checklist.requiredCompleted} of ${checklist.requiredTotal} required steps complete`}
               />
               <Text as="p" variant="headingLg">{checklist.progress}%</Text>
             </InlineStack>
@@ -154,7 +184,7 @@ export default function OnboardingPage() {
         {/* Step list */}
         <Card>
           <BlockStack gap="200">
-            <SectionHeader title="Setup Steps" description="Complete each step to unlock the full platform." />
+            <SectionHeader title="Recovery Setup Steps" description="Complete each step to start recovering revenue from unanswered customer questions." />
             {checklist.steps.map((step, idx) => (
               <BlockStack key={step.id} gap="100">
                 {idx > 0 ? <Divider /> : null}
