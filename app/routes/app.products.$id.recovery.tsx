@@ -1,6 +1,7 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { json } from "@remix-run/node";
 import { Form, useActionData, useLoaderData, useNavigation } from "@remix-run/react";
+import { useEffect, useState } from "react";
 import {
   Badge,
   Banner,
@@ -23,6 +24,7 @@ import { logUsage } from "~/lib/log-usage.server";
 import { EMPTY_INSIGHT } from "~/lib/types";
 import type { KeywordGroupId } from "~/lib/types";
 import { isReviewerMode, buildSampleInsight } from "~/lib/reviewer-mode.server";
+import { ACTION_TIMEOUT_MS, formActionKey, makeActionKey, shopAdminProductUrl } from "~/lib/action-loading";
 
 const SECTION_LABELS: Record<string, string> = {
   ingredients: "Ingredients",
@@ -113,6 +115,7 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
 
     return json({
       productId,
+      decodedProductId: decodeURIComponent(productId),
       productTitle,
       vendor: product?.vendor ?? null,
       productType: product?.productType ?? null,
@@ -123,12 +126,15 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
       relatedOpportunities,
       existingDrafts,
       isSampleMode: sampleMode,
+      shopDomain: shop.shopDomain,
+      adminProductUrl: shopAdminProductUrl(shop.shopDomain, decodeURIComponent(productId)),
       loadError: null,
     });
   } catch (error) {
     console.error("Product recovery loader failed", error);
     return json({
       productId,
+      decodedProductId: decodeURIComponent(productId),
       productTitle: `Product ${productId}`,
       vendor: null,
       productType: null,
@@ -139,6 +145,8 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
       relatedOpportunities: [],
       existingDrafts: [],
       isSampleMode: false,
+      shopDomain: "",
+      adminProductUrl: null,
       loadError: "Recovery data is loading. Refresh in a moment.",
     });
   }
@@ -221,6 +229,7 @@ export async function action({ request, params }: ActionFunctionArgs) {
 export default function ProductRecoveryPage() {
   const {
     productId,
+    decodedProductId,
     productTitle,
     vendor,
     productType,
@@ -231,12 +240,35 @@ export default function ProductRecoveryPage() {
     relatedOpportunities,
     existingDrafts,
     isSampleMode,
+    adminProductUrl,
     loadError,
   } = useLoaderData<typeof loader>();
 
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
-  const busy = navigation.state !== "idle";
+  const [pendingActionKey, setPendingActionKey] = useState<string | null>(null);
+  const [pendingStartedAt, setPendingStartedAt] = useState<number | null>(null);
+  const [timeoutWarning, setTimeoutWarning] = useState(false);
+  const generateKey = makeActionKey("generate:recovery-pack", decodedProductId);
+  const activeFormKey = formActionKey(navigation.formData);
+  const generateLoading = navigation.state !== "idle" && (activeFormKey === generateKey || pendingActionKey === generateKey);
+
+  useEffect(() => {
+    if (navigation.state === "idle") {
+      setPendingActionKey(null);
+      setPendingStartedAt(null);
+    }
+  }, [navigation.state]);
+
+  useEffect(() => {
+    if (!pendingActionKey || pendingStartedAt === null) return;
+    const timeout = window.setTimeout(() => {
+      setPendingActionKey(null);
+      setPendingStartedAt(null);
+      setTimeoutWarning(true);
+    }, ACTION_TIMEOUT_MS);
+    return () => window.clearTimeout(timeout);
+  }, [pendingActionKey, pendingStartedAt]);
 
   if (navigation.state === "loading") return <ListSkeleton />;
 
@@ -287,14 +319,25 @@ export default function ProductRecoveryPage() {
       primaryAction={
         <Form method="post">
           <input type="hidden" name="intent" value="generate-pack" />
+          <input type="hidden" name="actionKey" value={generateKey} />
           <input type="hidden" name="productTitle" value={productTitle} />
           <input type="hidden" name="topGroups" value={topGroups.join(",")} />
-          <Button submit variant="primary" loading={busy}>
+          <Button
+            submit
+            variant="primary"
+            loading={generateLoading}
+            disabled={generateLoading}
+            onClick={() => {
+              setPendingActionKey(generateKey);
+              setPendingStartedAt(Date.now());
+              setTimeoutWarning(false);
+            }}
+          >
             Generate Recovery Pack
           </Button>
         </Form>
       }
-      secondaryAction={<Button url="/app/products">Back to Products</Button>}
+      secondaryAction={adminProductUrl ? <Button url={adminProductUrl} target="_blank">View in Shopify Admin</Button> : <Button url="/app/products">Back to Products</Button>}
     >
       <BlockStack gap="500">
         {loadError ? (
@@ -308,6 +351,12 @@ export default function ProductRecoveryPage() {
               real recovery opportunities for your products.
             </p>
             <Button url="/app/import" variant="plain">Import Customer Questions</Button>
+          </Banner>
+        ) : null}
+
+        {timeoutWarning ? (
+          <Banner tone="warning" title="Action took longer than expected">
+            <p>Action took longer than expected. You can safely retry.</p>
           </Banner>
         ) : null}
 

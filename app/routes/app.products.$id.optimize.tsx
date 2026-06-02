@@ -222,7 +222,7 @@ export default function ProductOptimizePage() {
     <AppPage
       title={`Optimize: ${productTitle}`}
       subtitle="Generate AI or rule-based content for each product section. Preview, save draft, then publish."
-      primaryAction={<Button url={`/app/products/${params.id}`}>Back to product</Button>}
+      primaryAction={<Button url={`/app/products/${params.id}/recovery`}>Back to product</Button>}
       secondaryAction={<Button url="/app/products">All products</Button>}
     >
       <BlockStack gap="500">

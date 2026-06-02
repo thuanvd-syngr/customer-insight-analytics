@@ -14,6 +14,7 @@ import {
   SectionHeader,
 } from "~/components";
 import prisma from "~/db.server";
+import { productRecoveryPath } from "~/lib/action-loading";
 import { getProductsPageState, shouldShowSyncedProducts } from "~/lib/products-view";
 import { safeCount } from "~/lib/prisma-safe";
 import { ensureShop, getLatestRun, parseRun } from "~/lib/shop.server";
@@ -335,7 +336,7 @@ export default function Products() {
                     {visibleSyncedProducts.map((product) => {
                       const gap = gapByProduct.get(product.externalId) ?? gapByProductTitle.get(product.title.toLowerCase());
                       const detailUrl = gap
-                        ? `/app/products/${encodeURIComponent(product.externalId)}`
+                        ? productRecoveryPath(product.externalId)
                         : "/app/import";
                       return (
                         <tr key={product.id}>
@@ -444,9 +445,7 @@ export default function Products() {
 
                   <div className="cia-two-grid">
                     {displayProducts.map((product) => {
-                      const detailUrl = `/app/products/${encodeURIComponent(
-                        product.productId ?? product.productTitle,
-                      )}`;
+                      const detailUrl = productRecoveryPath(product.productId ?? product.productTitle);
                       const topGroup = product.topGroups[0];
                       const gap = gapByProduct.get(product.productId ?? product.productTitle);
                       const range = recoveryRangeFor(product.topGroups);

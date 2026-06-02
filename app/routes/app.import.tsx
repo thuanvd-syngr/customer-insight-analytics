@@ -3,15 +3,17 @@ import { json, redirect } from "@remix-run/node";
 import { Form, useActionData, useLoaderData, useNavigation } from "@remix-run/react";
 import {
   BlockStack,
+  Banner,
   Button,
   Card,
   ProgressBar,
   Select,
   Text,
 } from "@shopify/polaris";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import prisma from "~/db.server";
+import { ACTION_TIMEOUT_MS, formActionKey, makeActionKey } from "~/lib/action-loading";
 import {
   canImportMessages,
   canRunAnalysis,
@@ -296,7 +298,32 @@ export default function ImportPage() {
   const navigation = useNavigation();
   const [source, setSource] = useState("manual");
   const [messages, setMessages] = useState("");
-  const busy = navigation.state !== "idle";
+  const [pendingActionKey, setPendingActionKey] = useState<string | null>(null);
+  const [pendingStartedAt, setPendingStartedAt] = useState<number | null>(null);
+  const [timeoutWarning, setTimeoutWarning] = useState(false);
+  const activeFormKey = formActionKey(navigation.formData);
+  const loadingFor = (actionKey: string) =>
+    navigation.state !== "idle" && (activeFormKey === actionKey || pendingActionKey === actionKey);
+  const markPending = (actionKey: string) => {
+    setPendingActionKey(actionKey);
+    setPendingStartedAt(Date.now());
+    setTimeoutWarning(false);
+  };
+  useEffect(() => {
+    if (navigation.state === "idle") {
+      setPendingActionKey(null);
+      setPendingStartedAt(null);
+    }
+  }, [navigation.state]);
+  useEffect(() => {
+    if (!pendingActionKey || pendingStartedAt === null) return;
+    const timeout = window.setTimeout(() => {
+      setPendingActionKey(null);
+      setPendingStartedAt(null);
+      setTimeoutWarning(true);
+    }, ACTION_TIMEOUT_MS);
+    return () => window.clearTimeout(timeout);
+  }, [pendingActionKey, pendingStartedAt]);
   return (
     <AppPage
       title="Revenue Recovery Onboarding"
@@ -304,7 +331,8 @@ export default function ImportPage() {
       primaryAction={
         <Form method="post">
           <input type="hidden" name="intent" value="analyze" />
-          <Button variant="primary" submit loading={busy}>Run analysis</Button>
+          <input type="hidden" name="actionKey" value={makeActionKey("run:analysis")} />
+          <Button variant="primary" submit loading={loadingFor(makeActionKey("run:analysis"))} disabled={loadingFor(makeActionKey("run:analysis"))} onClick={() => markPending(makeActionKey("run:analysis"))}>Run analysis</Button>
         </Form>
       }
     >
@@ -316,6 +344,11 @@ export default function ImportPage() {
             </Text>
           </Card>
         ) : null}
+        {timeoutWarning ? (
+          <Banner tone="warning" title="Action took longer than expected">
+            <p>Action took longer than expected. You can safely retry.</p>
+          </Banner>
+        ) : null}
         {isDataStale && !analysisGateAllowed ? (
           <Card>
             <BlockStack gap="200">
@@ -324,7 +357,8 @@ export default function ImportPage() {
               </Text>
               <Form method="post">
                 <input type="hidden" name="intent" value="analyze" />
-                <Button variant="primary" submit loading={busy}>Run fresh analysis</Button>
+                <input type="hidden" name="actionKey" value={makeActionKey("run:analysis")} />
+                <Button variant="primary" submit loading={loadingFor(makeActionKey("run:analysis"))} disabled={loadingFor(makeActionKey("run:analysis"))} onClick={() => markPending(makeActionKey("run:analysis"))}>Run fresh analysis</Button>
               </Form>
             </BlockStack>
           </Card>
@@ -337,7 +371,8 @@ export default function ImportPage() {
               </Text>
               <Form method="post">
                 <input type="hidden" name="intent" value="force-analyze" />
-                <Button submit loading={busy}>Force reanalyze (dev only)</Button>
+                <input type="hidden" name="actionKey" value={makeActionKey("run:analysis:force")} />
+                <Button submit loading={loadingFor(makeActionKey("run:analysis:force"))} disabled={loadingFor(makeActionKey("run:analysis:force"))} onClick={() => markPending(makeActionKey("run:analysis:force"))}>Force reanalyze (dev only)</Button>
               </Form>
             </BlockStack>
           </Card>
@@ -476,14 +511,15 @@ export default function ImportPage() {
               <BlockStack gap="300">
                 <SectionHeader title="Step 1: Sync product and order data" description="Product content sync, product gap analysis, and order notes if available." />
                 <input type="hidden" name="intent" value="sync" />
-                <Button submit loading={busy} variant="primary">Sync product and order data</Button>
+                <input type="hidden" name="actionKey" value={makeActionKey("sync:products")} />
+                <Button submit loading={loadingFor(makeActionKey("sync:products"))} disabled={loadingFor(makeActionKey("sync:products"))} variant="primary" onClick={() => markPending(makeActionKey("sync:products"))}>Sync product and order data</Button>
                 <Text as="p" variant="bodySm" tone="subdued">
                   Supported now: product content sync, product gap analysis, imported customer questions, and order notes if available.
                 </Text>
                 <Text as="p" variant="bodySm" tone="subdued">
                   Not available yet: customer profile analysis. {CUSTOMER_APPROVAL_COPY}
                 </Text>
-                <Button url="/app" disabled={busy}>Continue with product analysis</Button>
+                <Button url="/app">Continue with product analysis</Button>
               </BlockStack>
             </Form>
           </Card>
@@ -493,7 +529,8 @@ export default function ImportPage() {
                 <BlockStack gap="300">
                   <SectionHeader title="Preview with sample conversations" description="Explore the recovery workflow before importing live customer questions." />
                   <input type="hidden" name="intent" value="sample" />
-                  <Button submit loading={busy}>Load sample data</Button>
+                  <input type="hidden" name="actionKey" value={makeActionKey("load:sample-data")} />
+                  <Button submit loading={loadingFor(makeActionKey("load:sample-data"))} disabled={loadingFor(makeActionKey("load:sample-data"))} onClick={() => markPending(makeActionKey("load:sample-data"))}>Load sample data</Button>
                 </BlockStack>
               </Form>
             </Card>
@@ -535,7 +572,8 @@ export default function ImportPage() {
                   }}
                 />
               </div>
-              <Button submit loading={busy}>Add customer questions</Button>
+              <input type="hidden" name="actionKey" value={makeActionKey("import:messages")} />
+              <Button submit loading={loadingFor(makeActionKey("import:messages"))} disabled={loadingFor(makeActionKey("import:messages"))} onClick={() => markPending(makeActionKey("import:messages"))}>Add customer questions</Button>
             </BlockStack>
           </Form>
         </Card>
@@ -545,7 +583,8 @@ export default function ImportPage() {
             <BlockStack gap="300">
               <SectionHeader title="Step 2: Analyze customer questions" description="Identify lost sales, affected products, and recovery actions." />
               <input type="hidden" name="intent" value="analyze" />
-              <Button variant="primary" submit loading={busy}>Run analysis</Button>
+              <input type="hidden" name="actionKey" value={makeActionKey("run:analysis")} />
+              <Button variant="primary" submit loading={loadingFor(makeActionKey("run:analysis"))} disabled={loadingFor(makeActionKey("run:analysis"))} onClick={() => markPending(makeActionKey("run:analysis"))}>Run analysis</Button>
             </BlockStack>
           </Form>
         </Card>

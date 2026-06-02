@@ -14,9 +14,10 @@ import {
   Select,
   Text,
 } from "@shopify/polaris";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import prisma from "~/db.server";
+import { ACTION_TIMEOUT_MS, formActionKey, makeActionKey } from "~/lib/action-loading";
 import { ensureShop, getLatestRun, parseRun } from "~/lib/shop.server";
 import { EMPTY_INSIGHT } from "~/lib/types";
 import { authenticate } from "~/shopify.server";
@@ -202,10 +203,29 @@ export default function BulkPage() {
   const navigation = useNavigation();
   const [jobType, setJobType] = useState<string>("generate");
   const [filterType, setFilterType] = useState<string>("");
+  const [pendingActionKey, setPendingActionKey] = useState<string | null>(null);
+  const [pendingStartedAt, setPendingStartedAt] = useState<number | null>(null);
+  const [timeoutWarning, setTimeoutWarning] = useState(false);
+  const bulkKey = makeActionKey("bulk:start");
+  const activeFormKey = formActionKey(navigation.formData);
+  const isSubmitting = navigation.state !== "idle" && (activeFormKey === bulkKey || pendingActionKey === bulkKey);
+  useEffect(() => {
+    if (navigation.state === "idle") {
+      setPendingActionKey(null);
+      setPendingStartedAt(null);
+    }
+  }, [navigation.state]);
+  useEffect(() => {
+    if (!pendingActionKey || pendingStartedAt === null) return;
+    const timeout = window.setTimeout(() => {
+      setPendingActionKey(null);
+      setPendingStartedAt(null);
+      setTimeoutWarning(true);
+    }, ACTION_TIMEOUT_MS);
+    return () => window.clearTimeout(timeout);
+  }, [pendingActionKey, pendingStartedAt]);
 
   if (navigation.state === "loading") return <ListSkeleton />;
-
-  const isSubmitting = navigation.state === "submitting";
   const filteredCount = applyBulkFilter(
     availableItems as BulkItem[],
     (filterType as BulkFilterType) || undefined,
@@ -229,6 +249,11 @@ export default function BulkPage() {
         {loadError ? <Banner tone="critical" title="Load error"><p>{loadError}</p></Banner> : null}
         {actionData && "error" in actionData ? (
           <Banner tone="critical" title="Action failed"><p>{actionData.error}</p></Banner>
+        ) : null}
+        {timeoutWarning ? (
+          <Banner tone="warning" title="Action took longer than expected">
+            <p>Action took longer than expected. You can safely retry.</p>
+          </Banner>
         ) : null}
 
         {!canBulk ? (
@@ -264,6 +289,7 @@ export default function BulkPage() {
             />
             <Form method="post">
               <input type="hidden" name="intent" value="start-bulk" />
+              <input type="hidden" name="actionKey" value={bulkKey} />
               <BlockStack gap="300">
                 <InlineGrid columns={{ xs: 1, sm: 2 }} gap="300">
                   <BlockStack gap="150">
@@ -295,6 +321,11 @@ export default function BulkPage() {
                   variant="primary"
                   loading={isSubmitting}
                   disabled={!canBulk || filteredCount === 0}
+                  onClick={() => {
+                    setPendingActionKey(bulkKey);
+                    setPendingStartedAt(Date.now());
+                    setTimeoutWarning(false);
+                  }}
                 >
                   {isSubmitting ? "Starting job…" : `Start Bulk Job (${formatNumber(filteredCount)} items)`}
                 </Button>

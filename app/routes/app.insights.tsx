@@ -24,6 +24,7 @@ import {
   PriorityBadge,
 } from "~/components";
 import prisma from "~/db.server";
+import { productRecoveryPath } from "~/lib/action-loading";
 import { ensureShop, getLatestRun, parseRun } from "~/lib/shop.server";
 import { EMPTY_INSIGHT } from "~/lib/types";
 import type { LeakageSeverity } from "~/lib/types";
@@ -230,7 +231,7 @@ export default function Insights() {
                   <Text as="span" variant="headingMd" tone={gap.estimatedHigh > 0 ? "success" : "subdued"}>
                     {gap.estimatedHigh > 0 ? `${moneyRange(gap.estimatedLow, gap.estimatedHigh)}/mo` : "Qualitative"}
                   </Text>
-                  <Button url={`/app/products/${encodeURIComponent(gap.productId ?? gap.productTitle)}`}>Open</Button>
+                  <Button url={productRecoveryPath(gap.productId ?? gap.productTitle)}>Open</Button>
                 </div>
               ))
             ) : (

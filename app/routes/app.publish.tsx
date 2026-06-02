@@ -1,6 +1,7 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { json, redirect } from "@remix-run/node";
 import { Form, useActionData, useLoaderData, useNavigation } from "@remix-run/react";
+import { useEffect, useState } from "react";
 import {
   Badge,
   Banner,
@@ -14,11 +15,12 @@ import {
 } from "@shopify/polaris";
 
 import prisma from "~/db.server";
+import { ACTION_TIMEOUT_MS, formActionKey, makeActionKey } from "~/lib/action-loading";
 import { getDevPlanOverride, resolvePlan, type PlanId } from "~/lib/billing";
 import { generateFaqFromOpportunity } from "~/lib/faq-generator";
 import { hasPublishAbuse, hasXss, sanitizeText } from "~/lib/sanitize";
 import { logUsage } from "~/lib/log-usage.server";
-import { safeCount } from "~/lib/prisma-safe";
+import { getDelegate, safeCount } from "~/lib/prisma-safe";
 import {
   ALL_PAGE_CONTENT_TYPES,
   BLOG_GROUP_LABELS,
@@ -39,6 +41,7 @@ import {
   publishFaqAsShopifyPage,
 } from "~/lib/publish/shopify-publisher.server";
 import { ensureShop, getLatestRun, parseRun } from "~/lib/shop.server";
+import { publishGeneratedFaq } from "~/lib/shopify-publish.server";
 import { EMPTY_INSIGHT } from "~/lib/types";
 import { authenticate } from "~/shopify.server";
 import { AppPage, SectionHeader, formatNumber } from "~/components";
@@ -52,7 +55,7 @@ async function getContext(request: Request) {
     devOverrideEnabled: process.env.ENABLE_DEV_PLAN_OVERRIDE === "true",
     isProduction: process.env.NODE_ENV === "production",
   });
-  return { shop, plan, admin };
+  return { shop, plan, admin, session };
 }
 
 function buildFaqsForType(type: PageContentType, insight: typeof EMPTY_INSIGHT): FaqItem[] {
@@ -83,17 +86,46 @@ function buildFaqsForGroup(groupId: string, insight: typeof EMPTY_INSIGHT): FaqI
 
 export async function loader({ request }: LoaderFunctionArgs) {
   try {
-    const { shop } = await getContext(request);
-    const [latestRun, published, counts] = await Promise.all([
+    const { shop, session } = await getContext(request);
+    const faqModel = getDelegate(prisma, "generatedFaq");
+    const bulkJob = getDelegate(prisma, "bulkJob");
+    const [latestRun, published, counts, generatedFaqs, recentBulkJobs] = await Promise.all([
       getLatestRun(prisma, shop.id),
       getPublishedContent(prisma, shop.id),
       getPublishedCounts(prisma, shop.id),
+      faqModel?.findMany
+        ? faqModel.findMany({ where: { shopId: shop.id, status: { in: ["draft", "generated", "prepared", "failed"] } }, orderBy: { createdAt: "desc" }, take: 25 })
+        : [],
+      bulkJob?.findMany
+        ? bulkJob.findMany({ where: { shopId: shop.id, jobType: "publish_pages" }, orderBy: { createdAt: "desc" }, take: 3 })
+        : [],
     ]);
     const insight = parseRun(latestRun) ?? EMPTY_INSIGHT;
+    const pagePreview = ALL_PAGE_CONTENT_TYPES.map((contentType) => ({
+      contentType,
+      label: PAGE_TYPE_LABELS[contentType],
+      faqCount: buildFaqsForType(contentType, insight).length,
+    }));
+    const blogPreview = BLOG_GROUPS.slice(0, 4).map((groupId) => ({
+      groupId,
+      label: BLOG_GROUP_LABELS[groupId] ?? groupId,
+      faqCount: buildFaqsForGroup(groupId, insight).length,
+    }));
+    const productFaqPreview = (generatedFaqs as Array<{ id: string; productId?: string | null; question: string; status: string }>).filter((faq) => faq.productId);
     return json({
       hasInsight: Boolean(latestRun),
       published,
       counts,
+      pagePreview,
+      blogPreview,
+      productFaqPreview,
+      recentBulkJobs,
+      diagnostics: {
+        writeContentScope: (session.scope ?? "").split(",").includes("write_content"),
+        shopDomain: shop.shopDomain,
+        onlineStorePublishCapability: counts.pages > 0 || published.some((item) => item.status === "published"),
+        targetTypes: ["page", "blog", "product_faq"],
+      },
       storeName: shop.shopDomain.replace(".myshopify.com", ""),
       loadError: null,
     });
@@ -104,6 +136,16 @@ export async function loader({ request }: LoaderFunctionArgs) {
       hasInsight: false,
       published: [],
       counts: { total: 0, pages: 0, productFaqs: 0, blogs: 0 },
+      pagePreview: ALL_PAGE_CONTENT_TYPES.map((contentType) => ({ contentType, label: PAGE_TYPE_LABELS[contentType], faqCount: 0 })),
+      blogPreview: BLOG_GROUPS.slice(0, 4).map((groupId) => ({ groupId, label: BLOG_GROUP_LABELS[groupId] ?? groupId, faqCount: 0 })),
+      productFaqPreview: [],
+      recentBulkJobs: [],
+      diagnostics: {
+        writeContentScope: false,
+        shopDomain: "",
+        onlineStorePublishCapability: false,
+        targetTypes: ["page", "blog", "product_faq"],
+      },
       storeName: "",
       loadError: "Publish data is loading. Refresh in a moment — your published pages are safe.",
     });
@@ -172,6 +214,105 @@ export async function action({ request }: ActionFunctionArgs) {
     return redirect("/app/publish");
   }
 
+  if (intent === "publish-all-recovery") {
+    const confirmed = String(form.get("confirm") ?? "") === "yes";
+    if (!confirmed) return json({ error: "Preview and confirm before publishing recovery content." }, { status: 400 });
+    const latestRun = await getLatestRun(prisma, shop.id);
+    const insight = parseRun(latestRun) ?? EMPTY_INSIGHT;
+    const bulkJob = getDelegate(prisma, "bulkJob");
+    const bulkItem = getDelegate(prisma, "bulkJobItem");
+    const revenueEvent = getDelegate(prisma, "revenueEvent");
+    const faqModel = getDelegate(prisma, "generatedFaq");
+    const started = new Date();
+    const pageTypes = ALL_PAGE_CONTENT_TYPES;
+    const blogGroups = BLOG_GROUPS.slice(0, 4);
+    const productFaqs = faqModel?.findMany
+      ? await faqModel.findMany({ where: { shopId: shop.id, status: { in: ["draft", "generated", "prepared", "failed"] }, productId: { not: null } }, orderBy: { createdAt: "desc" }, take: 10 })
+      : [];
+    const totalItems = pageTypes.length + blogGroups.length + productFaqs.length;
+    const job = bulkJob?.create
+      ? await bulkJob.create({
+          data: {
+            shopId: shop.id,
+            jobType: "publish_pages",
+            status: "running",
+            filterType: "storewide",
+            totalItems,
+            startedAt: started,
+          },
+        })
+      : null;
+    let success = 0;
+    let failed = 0;
+    const errors: string[] = [];
+    async function recordItem(itemId: string, itemType: string, ok: boolean, result?: string | null, error?: string | null) {
+      if (!job?.id || !bulkItem?.create) return;
+      await bulkItem.create({
+        data: {
+          jobId: job.id,
+          itemId,
+          itemType,
+          status: ok ? "completed" : "failed",
+          result: result ?? null,
+          error: error ?? null,
+        },
+      });
+    }
+    for (const contentType of pageTypes) {
+      const faqs = buildFaqsForType(contentType, insight);
+      const result = await publishFaqAsShopifyPage({ db: prisma, admin, shopId: shop.id, contentType, faqs });
+      if (result.ok) success++; else { failed++; errors.push(result.error ?? `${PAGE_TYPE_LABELS[contentType]} failed`); }
+      await recordItem(contentType, "page", result.ok, result.resourceTitle, result.error);
+    }
+    for (const groupId of blogGroups) {
+      const faqs = buildFaqsForGroup(groupId, insight);
+      const result = await publishFaqAsBlogArticle({
+        db: prisma,
+        admin,
+        shopId: shop.id,
+        groupId,
+        faqs,
+        storeName: shop.shopDomain.replace(".myshopify.com", ""),
+      });
+      if (result.ok) success++; else { failed++; errors.push(result.error ?? `${groupId} blog failed`); }
+      await recordItem(groupId, "blog", result.ok, result.resourceTitle, result.error);
+    }
+    for (const faq of productFaqs as Array<{ id: string; question: string }>) {
+      const result = await publishGeneratedFaq({ db: prisma, admin, shopId: shop.id, faqId: faq.id, target: "metafield" });
+      const ok = result.status === "published";
+      if (ok) success++; else { failed++; errors.push(result.error ?? `${faq.question} failed`); }
+      await recordItem(faq.id, "product_faq", ok, faq.question, result.error);
+    }
+    if (bulkJob?.update && job?.id) {
+      await bulkJob.update({
+        where: { id: job.id },
+        data: {
+          status: failed > 0 ? "failed" : "completed",
+          processedItems: success,
+          failedItems: failed,
+          resultJson: JSON.stringify({ success, failed, errors: errors.slice(0, 10) }),
+          error: failed > 0 ? errors[0] ?? "Some recovery content failed to publish." : null,
+          completedAt: new Date(),
+        },
+      });
+    }
+    if (revenueEvent?.create && success > 0) {
+      await revenueEvent.create({
+        data: {
+          shopId: shop.id,
+          eventType: "content_published",
+          description: `Published ${success} recovery content assets`,
+          refId: job?.id ?? null,
+          refType: "bulk_job",
+          lowEstimate: success * 75,
+          highEstimate: success * 250,
+        },
+      });
+    }
+    await logUsage(prisma, shop.id, "content_published", { mode: "publish_all_recovery", success, failed });
+    return redirect("/app/publish");
+  }
+
   if (intent === "delete") {
     const id = String(form.get("id") ?? "");
     const resourceId = String(form.get("resourceId") ?? "");
@@ -197,10 +338,35 @@ function contentTypeTone(type: PageContentType): "info" | "success" | "warning" 
 }
 
 export default function PublishHub() {
-  const { hasInsight, published, counts, storeName, loadError } = useLoaderData<typeof loader>();
+  const { hasInsight, published, counts, pagePreview, blogPreview, productFaqPreview, recentBulkJobs, diagnostics, storeName, loadError } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
-  const busy = navigation.state !== "idle";
+  const [pendingActionKey, setPendingActionKey] = useState<string | null>(null);
+  const [pendingStartedAt, setPendingStartedAt] = useState<number | null>(null);
+  const [timeoutWarning, setTimeoutWarning] = useState(false);
+  const activeFormKey = formActionKey(navigation.formData);
+  const loadingFor = (actionKey: string) =>
+    navigation.state !== "idle" && (activeFormKey === actionKey || pendingActionKey === actionKey);
+  const markPending = (actionKey: string) => {
+    setPendingActionKey(actionKey);
+    setPendingStartedAt(Date.now());
+    setTimeoutWarning(false);
+  };
+  useEffect(() => {
+    if (navigation.state === "idle") {
+      setPendingActionKey(null);
+      setPendingStartedAt(null);
+    }
+  }, [navigation.state]);
+  useEffect(() => {
+    if (!pendingActionKey || pendingStartedAt === null) return;
+    const timeout = window.setTimeout(() => {
+      setPendingActionKey(null);
+      setPendingStartedAt(null);
+      setTimeoutWarning(true);
+    }, ACTION_TIMEOUT_MS);
+    return () => window.clearTimeout(timeout);
+  }, [pendingActionKey, pendingStartedAt]);
   const actionError = actionData && "error" in actionData ? actionData.error : null;
 
   const activePublished = published.filter((p): p is NonNullable<typeof p> => p != null && p.status === "published");
@@ -219,6 +385,11 @@ export default function PublishHub() {
           <Banner tone="warning" title="Publish did not complete">
             <p>{actionError}</p>
             <p>Your store data is safe. Check your Shopify store connection and try again.</p>
+          </Banner>
+        ) : null}
+        {timeoutWarning ? (
+          <Banner tone="warning" title="Action took longer than expected">
+            <p>Action took longer than expected. You can safely retry.</p>
           </Banner>
         ) : null}
 
@@ -252,6 +423,88 @@ export default function PublishHub() {
           </div>
         </div>
 
+        <Card>
+          <BlockStack gap="300">
+            <InlineStack align="space-between" blockAlign="start" wrap={false}>
+              <BlockStack gap="100">
+                <Text as="h2" variant="headingMd">Publish All Recovery Content</Text>
+                <Text as="p" variant="bodySm" tone="subdued">
+                  Preview the recovery batch, confirm, then publish pages, blogs, FAQs, and product FAQs. Failed items are tracked and can be retried by running the batch again.
+                </Text>
+              </BlockStack>
+              <Badge tone="warning">Preview required</Badge>
+            </InlineStack>
+            <InlineGrid columns={{ xs: 1, md: 3 }} gap="300">
+              <BlockStack gap="100">
+                <Text as="p" variant="headingSm">Pages</Text>
+                {pagePreview.map((item) => (
+                  <Text key={item.contentType} as="p" variant="bodySm">{`${item.label} · ${item.faqCount} FAQs`}</Text>
+                ))}
+              </BlockStack>
+              <BlockStack gap="100">
+                <Text as="p" variant="headingSm">Blogs</Text>
+                {blogPreview.map((item) => (
+                  <Text key={item.groupId} as="p" variant="bodySm">{`${item.label} Guide · ${item.faqCount} FAQs`}</Text>
+                ))}
+              </BlockStack>
+              <BlockStack gap="100">
+                <Text as="p" variant="headingSm">Product FAQs</Text>
+                <Text as="p" variant="bodySm">{`${formatNumber(productFaqPreview.length)} product FAQ drafts ready`}</Text>
+                <Text as="p" variant="bodySm" tone="subdued">Draft-only FAQs without a product remain unpublished.</Text>
+              </BlockStack>
+            </InlineGrid>
+            <Form method="post">
+              <input type="hidden" name="intent" value="publish-all-recovery" />
+              <input type="hidden" name="confirm" value="yes" />
+              <input type="hidden" name="actionKey" value={makeActionKey("publish:all-recovery")} />
+              <Button
+                submit
+                variant="primary"
+                loading={loadingFor(makeActionKey("publish:all-recovery"))}
+                disabled={loadingFor(makeActionKey("publish:all-recovery"))}
+                onClick={() => markPending(makeActionKey("publish:all-recovery"))}
+              >
+                Confirm and Publish All Recovery Content
+              </Button>
+            </Form>
+            {recentBulkJobs.length > 0 ? (
+              <BlockStack gap="100">
+                <Text as="p" variant="headingSm">Recent publish batches</Text>
+                {recentBulkJobs.map((job: { id: string; status: string; processedItems: number; failedItems: number; createdAt: string | Date }) => (
+                  <InlineStack key={job.id} gap="200" blockAlign="center">
+                    <Badge tone={job.status === "completed" ? "success" : job.status === "failed" ? "critical" : "info"}>{job.status}</Badge>
+                    <Text as="span" variant="bodySm">{`${formatNumber(job.processedItems)} success · ${formatNumber(job.failedItems)} failed · ${new Date(job.createdAt).toLocaleDateString()}`}</Text>
+                  </InlineStack>
+                ))}
+              </BlockStack>
+            ) : null}
+          </BlockStack>
+        </Card>
+
+        <Card>
+          <BlockStack gap="200">
+            <SectionHeader title="Publish Diagnostics" description="Use this when a page, blog, or product FAQ publish fails." />
+            <InlineGrid columns={{ xs: 1, md: 4 }} gap="300">
+              <BlockStack gap="050">
+                <Text as="p" variant="bodySm" tone="subdued">write_content scope</Text>
+                <Badge tone={diagnostics.writeContentScope ? "success" : "critical"}>{diagnostics.writeContentScope ? "Granted" : "Missing"}</Badge>
+              </BlockStack>
+              <BlockStack gap="050">
+                <Text as="p" variant="bodySm" tone="subdued">Online store publish</Text>
+                <Badge tone={diagnostics.onlineStorePublishCapability ? "success" : "info"}>{diagnostics.onlineStorePublishCapability ? "Verified" : "Not verified yet"}</Badge>
+              </BlockStack>
+              <BlockStack gap="050">
+                <Text as="p" variant="bodySm" tone="subdued">Shop domain</Text>
+                <Text as="p" variant="bodySm">{diagnostics.shopDomain || "Unknown"}</Text>
+              </BlockStack>
+              <BlockStack gap="050">
+                <Text as="p" variant="bodySm" tone="subdued">Target types</Text>
+                <Text as="p" variant="bodySm">{diagnostics.targetTypes.join(", ")}</Text>
+              </BlockStack>
+            </InlineGrid>
+          </BlockStack>
+        </Card>
+
         <BlockStack gap="300">
           <SectionHeader
             title="Publish Shopify Pages"
@@ -273,7 +526,15 @@ export default function PublishHub() {
                     <Form method="post">
                       <input type="hidden" name="intent" value="publish-page" />
                       <input type="hidden" name="contentType" value={type} />
-                      <Button submit loading={busy} variant={alreadyPublished ? undefined : "primary"} size="slim">
+                      <input type="hidden" name="actionKey" value={makeActionKey("publish:page", type)} />
+                      <Button
+                        submit
+                        loading={loadingFor(makeActionKey("publish:page", type))}
+                        disabled={loadingFor(makeActionKey("publish:page", type))}
+                        variant={alreadyPublished ? undefined : "primary"}
+                        size="slim"
+                        onClick={() => markPending(makeActionKey("publish:page", type))}
+                      >
                         {alreadyPublished ? "Republish" : "Publish to Shopify"}
                       </Button>
                     </Form>
@@ -303,7 +564,16 @@ export default function PublishHub() {
                       <input type="hidden" name="intent" value="publish-blog" />
                       <input type="hidden" name="groupId" value={groupId} />
                       <input type="hidden" name="storeName" value={storeName} />
-                      <Button submit loading={busy} size="slim">Publish Blog Article</Button>
+                      <input type="hidden" name="actionKey" value={makeActionKey("publish:blog", groupId)} />
+                      <Button
+                        submit
+                        loading={loadingFor(makeActionKey("publish:blog", groupId))}
+                        disabled={loadingFor(makeActionKey("publish:blog", groupId))}
+                        size="slim"
+                        onClick={() => markPending(makeActionKey("publish:blog", groupId))}
+                      >
+                        Publish Blog Article
+                      </Button>
                     </Form>
                   </BlockStack>
                 </Card>
@@ -324,7 +594,25 @@ export default function PublishHub() {
                       <Text as="p" variant="bodySm">{item.resourceTitle}</Text>
                       <Text as="p" variant="bodySm" tone="critical">{item.error ?? "Unknown error"}</Text>
                     </BlockStack>
-                    <Badge tone="critical">Failed</Badge>
+                    <InlineStack gap="200" blockAlign="center">
+                      <Badge tone="critical">Failed</Badge>
+                      <Form method="post">
+                        <input type="hidden" name="intent" value={item.contentType === "blog_article" ? "publish-blog" : "publish-page"} />
+                        <input type="hidden" name="contentType" value={item.contentType} />
+                        <input type="hidden" name="groupId" value={item.contentType.replace("_page", "")} />
+                        <input type="hidden" name="storeName" value={storeName} />
+                        <input type="hidden" name="actionKey" value={makeActionKey("publish:retry", item.id)} />
+                        <Button
+                          submit
+                          size="slim"
+                          loading={loadingFor(makeActionKey("publish:retry", item.id))}
+                          disabled={loadingFor(makeActionKey("publish:retry", item.id))}
+                          onClick={() => markPending(makeActionKey("publish:retry", item.id))}
+                        >
+                          Retry failed
+                        </Button>
+                      </Form>
+                    </InlineStack>
                   </InlineStack>
                 </BlockStack>
               ))}
@@ -376,7 +664,15 @@ export default function PublishHub() {
                             <input type="hidden" name="id" value={item.id} />
                             <input type="hidden" name="resourceId" value={item.resourceId} />
                             <input type="hidden" name="contentType" value={item.contentType} />
-                            <Button submit tone="critical" size="slim" loading={busy}>
+                            <input type="hidden" name="actionKey" value={makeActionKey("publish:delete", item.id)} />
+                            <Button
+                              submit
+                              tone="critical"
+                              size="slim"
+                              loading={loadingFor(makeActionKey("publish:delete", item.id))}
+                              disabled={loadingFor(makeActionKey("publish:delete", item.id))}
+                              onClick={() => markPending(makeActionKey("publish:delete", item.id))}
+                            >
                               Delete from Shopify
                             </Button>
                           </Form>
