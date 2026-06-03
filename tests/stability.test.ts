@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { getUsageSnapshot } from "~/lib/billing";
 import { getDelegate, safeCount } from "~/lib/prisma-safe";
@@ -67,6 +67,10 @@ function productAdmin(): AdminLike {
     }),
   };
 }
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe("stability fallbacks", () => {
   it("Shopify sync continues without protected customer data", async () => {
@@ -208,6 +212,52 @@ describe("stability fallbacks", () => {
     expect(result.products.ok).toBe(true);
     expect(result.products.count).toBe(1);
     expect(result.orders.ok).toBe(true);
+  });
+
+  it("falls back to REST product sync when Shopify Admin GraphQL is forbidden", async () => {
+    const db = dbWithProductColumns(["tags", "vendor", "productType", "shopifyUpdatedAt", "collections"]);
+    const admin: AdminLike = {
+      graphql: vi.fn(async (query: string) => {
+        if (query.includes("products(")) {
+          throw new Response(
+            JSON.stringify({ errors: { networkStatusCode: 403, message: "GraphQL Client: Forbidden", response: {} } }),
+            { status: 403 },
+          );
+        }
+        return jsonResponse({ data: { orders: { nodes: [], pageInfo: { hasNextPage: false } } } });
+      }),
+    };
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({
+      products: [{
+        id: 123,
+        admin_graphql_api_id: "gid://shopify/Product/123",
+        title: "REST Hoodie",
+        handle: "rest-hoodie",
+        vendor: "IndexBoost",
+        updated_at: "2026-06-01T00:00:00Z",
+        body_html: "Loaded from REST",
+        tags: "winter, featured",
+        product_type: "Apparel",
+      }],
+    })));
+
+    const result = await syncShopifyData(db, "shop_1", admin, {
+      shopDomain: "test.myshopify.com",
+      accessToken: "shpat_test",
+      grantedScopes: "write_products,read_orders",
+    });
+
+    expect(result.products.ok).toBe(true);
+    expect(result.products.count).toBe(1);
+    expect(db.shopifyProduct.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      where: { shopId_externalId: { shopId: "shop_1", externalId: "gid://shopify/Product/123" } },
+    }));
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      expect.objectContaining({ hostname: "test.myshopify.com" }),
+      expect.objectContaining({
+        headers: expect.objectContaining({ "X-Shopify-Access-Token": "shpat_test" }),
+      }),
+    );
   });
 
   it("returns safe fallbacks when Prisma delegates are missing", async () => {

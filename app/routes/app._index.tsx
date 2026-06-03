@@ -56,6 +56,7 @@ export async function action({ request }: ActionFunctionArgs) {
     const autoSync = await syncShopifyData(prisma, shop.id, admin, {
       shopDomain: shop.shopDomain,
       grantedScopes: session.scope,
+      accessToken: session.accessToken,
     });
     const [stored, storedProducts, settings, totalProductCount] = await Promise.all([
       prisma.importedMessage.findMany({

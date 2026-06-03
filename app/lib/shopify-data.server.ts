@@ -103,6 +103,8 @@ type ShopifyProductWriteData = {
   collections?: string;
 };
 
+const SHOPIFY_ADMIN_REST_VERSION = "2026-01";
+
 function errorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
   if (error instanceof Headers) return "Shopify Admin GraphQL request failed with empty response headers.";
@@ -122,7 +124,11 @@ function summarizeResponseBody(body: unknown): string {
 }
 
 function isAccessError(error: unknown): boolean {
-  return /(access|approved|protected|permission|scope|customer object|unauthorized|token)/i.test(errorMessage(error));
+  return /(access|approved|protected|permission|scope|customer object|unauthorized|token|forbidden)/i.test(errorMessage(error));
+}
+
+function isGraphqlForbidden(error: unknown): boolean {
+  return /GraphQL Client: Forbidden|HTTP 403/i.test(errorMessage(error));
 }
 
 function hasScope(grantedScopes: string | null | undefined, scope: string): boolean {
@@ -270,6 +276,104 @@ interface ShopifyOrderNode {
   processedAt?: string | null;
 }
 
+interface ShopifyRestProduct {
+  id: number | string;
+  admin_graphql_api_id?: string | null;
+  title?: string | null;
+  handle?: string | null;
+  vendor?: string | null;
+  updated_at?: string | null;
+  body_html?: string | null;
+  tags?: string | string[] | null;
+  product_type?: string | null;
+}
+
+interface ShopifyRestOrder {
+  id: number | string;
+  admin_graphql_api_id?: string | null;
+  name?: string | null;
+  note?: string | null;
+  tags?: string | string[] | null;
+  created_at?: string | null;
+  processed_at?: string | null;
+}
+
+function splitShopifyTags(tags: string | string[] | null | undefined): string[] {
+  if (Array.isArray(tags)) return tags;
+  return String(tags ?? "")
+    .split(",")
+    .map((tag) => tag.trim())
+    .filter(Boolean);
+}
+
+async function fetchShopifyRestJson<T>(
+  opts: { shopDomain?: string; accessToken?: string | null; path: string },
+): Promise<T> {
+  if (!opts.shopDomain) throw new Error("Shopify shop domain is unavailable for REST fallback.");
+  if (!opts.accessToken) throw new Error("Shopify access token is unavailable for REST fallback.");
+  const url = new URL(`https://${opts.shopDomain}/admin/api/${SHOPIFY_ADMIN_REST_VERSION}/${opts.path}`);
+  const response = await fetch(url, {
+    headers: {
+      "X-Shopify-Access-Token": opts.accessToken,
+      "Accept": "application/json",
+    },
+  });
+  const text = await response.text();
+  let body: unknown = null;
+  if (text.trim()) {
+    try {
+      body = JSON.parse(text);
+    } catch {
+      body = text;
+    }
+  }
+  if (response.status >= 400) {
+    throw new Error(`Shopify Admin REST HTTP ${response.status}: ${summarizeResponseBody(body)}`);
+  }
+  return body as T;
+}
+
+async function fetchProductsRest(
+  opts: { shopDomain?: string; accessToken?: string | null; limit?: number },
+): Promise<ProductInput[]> {
+  const limit = Math.min(Math.max(opts.limit ?? 250, 1), 250);
+  const body = await fetchShopifyRestJson<{ products?: ShopifyRestProduct[] }>({
+    shopDomain: opts.shopDomain,
+    accessToken: opts.accessToken,
+    path: `products.json?limit=${limit}&fields=id,admin_graphql_api_id,title,handle,vendor,updated_at,body_html,tags,product_type`,
+  });
+  return (body.products ?? []).map((product) => ({
+    id: product.admin_graphql_api_id ?? `gid://shopify/Product/${product.id}`,
+    title: product.title ?? "Untitled product",
+    handle: product.handle ?? undefined,
+    vendor: product.vendor ?? null,
+    updatedAt: product.updated_at ?? null,
+    description: product.body_html ?? "",
+    tags: splitShopifyTags(product.tags),
+    productType: product.product_type ?? null,
+    collections: [],
+  }));
+}
+
+async function fetchOrderSnapshotsRest(
+  opts: { shopDomain?: string; accessToken?: string | null; limit?: number },
+): Promise<ShopifyOrderNode[]> {
+  const limit = Math.min(Math.max(opts.limit ?? 250, 1), 250);
+  const body = await fetchShopifyRestJson<{ orders?: ShopifyRestOrder[] }>({
+    shopDomain: opts.shopDomain,
+    accessToken: opts.accessToken,
+    path: `orders.json?status=any&limit=${limit}&fields=id,admin_graphql_api_id,name,note,tags,created_at,processed_at`,
+  });
+  return (body.orders ?? []).map((order) => ({
+    id: order.admin_graphql_api_id ?? `gid://shopify/Order/${order.id}`,
+    name: order.name ?? null,
+    note: order.note ?? null,
+    tags: splitShopifyTags(order.tags),
+    createdAt: order.created_at ?? new Date().toISOString(),
+    processedAt: order.processed_at ?? order.created_at ?? null,
+  }));
+}
+
 export async function fetchOrderSnapshots(
   admin: AdminLike,
   opts: { first?: number; limit?: number; context?: { shop?: string } } = {},
@@ -338,7 +442,7 @@ export async function syncShopifyData(
   db: PrismaClient,
   shopId: string,
   admin: AdminLike,
-  opts: { shopDomain?: string; grantedScopes?: string | null } = {},
+  opts: { shopDomain?: string; grantedScopes?: string | null; accessToken?: string | null } = {},
 ): Promise<ShopifySyncResult> {
   const now = new Date();
   const shopifyProduct = getDelegate(db, "shopifyProduct");
@@ -384,7 +488,25 @@ export async function syncShopifyData(
       hasWriteContent: hasScope(opts.grantedScopes, "write_content"),
       maxProducts: 1000,
     });
-    products = await fetchProducts(admin, { first: 50, limit: 1000, context: { shop: opts.shopDomain } });
+    try {
+      products = await fetchProducts(admin, { first: 50, limit: 1000, context: { shop: opts.shopDomain } });
+    } catch (graphqlError) {
+      if (!isGraphqlForbidden(graphqlError)) throw graphqlError;
+      console.warn("Shopify product GraphQL sync forbidden. Trying REST fallback.", {
+        shop: opts.shopDomain,
+        grantedScopes: opts.grantedScopes,
+        error: errorMessage(graphqlError),
+      });
+      try {
+        products = await fetchProductsRest({
+          shopDomain: opts.shopDomain,
+          accessToken: opts.accessToken,
+          limit: 250,
+        });
+      } catch (restError) {
+        throw new Error(`${errorMessage(graphqlError)}; REST fallback failed: ${errorMessage(restError)}`);
+      }
+    }
     console.info("Shopify product sync returned", {
       shop: opts.shopDomain,
       count: products.length,
@@ -440,7 +562,25 @@ export async function syncShopifyData(
         reason: "Orders could not be synced because Shopify requires re-installing the app after scope changes.",
       };
     } else {
-      orders = await fetchOrderSnapshots(admin, { first: 100, limit: 1000, context: { shop: opts.shopDomain } });
+      try {
+        orders = await fetchOrderSnapshots(admin, { first: 100, limit: 1000, context: { shop: opts.shopDomain } });
+      } catch (graphqlError) {
+        if (!isGraphqlForbidden(graphqlError)) throw graphqlError;
+        console.warn("Shopify order GraphQL sync forbidden. Trying REST fallback.", {
+          shop: opts.shopDomain,
+          grantedScopes: opts.grantedScopes,
+          error: errorMessage(graphqlError),
+        });
+        try {
+          orders = await fetchOrderSnapshotsRest({
+            shopDomain: opts.shopDomain,
+            accessToken: opts.accessToken,
+            limit: 250,
+          });
+        } catch (restError) {
+          throw new Error(`${errorMessage(graphqlError)}; REST fallback failed: ${errorMessage(restError)}`);
+        }
+      }
       if (!shopifyOrder?.upsert) {
         result.orders = { ok: false, count: 0, skipped: true, reason: "Order storage unavailable" };
       } else {

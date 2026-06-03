@@ -233,6 +233,7 @@ export async function action({ request }: ActionFunctionArgs) {
     const sync = await syncShopifyData(prisma, shop.id, admin, {
       shopDomain: shop.shopDomain,
       grantedScopes: session.scope,
+      accessToken: session.accessToken,
     });
     return json({ ok: true, sync });
   }
