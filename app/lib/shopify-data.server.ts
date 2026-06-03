@@ -2,6 +2,7 @@ import type { NormalizedMessage, PageInput, ProductInput } from "~/lib/types";
 import type { PrismaClient } from "@prisma/client";
 import { getDelegate } from "~/lib/prisma-safe";
 import { getShopifyProductSchemaDiagnostics } from "~/lib/schema-diagnostics.server";
+import { hasRequiredScope } from "~/lib/scope-guard.server";
 import { processInBatches } from "~/lib/utils";
 
 export interface AdminLike {
@@ -82,10 +83,7 @@ function isAccessError(error: unknown): boolean {
 }
 
 function hasScope(grantedScopes: string | null | undefined, scope: string): boolean {
-  return (grantedScopes ?? "")
-    .split(",")
-    .map((item) => item.trim())
-    .includes(scope);
+  return hasRequiredScope(grantedScopes, scope);
 }
 
 function friendlyProductSyncError(error: unknown): string {

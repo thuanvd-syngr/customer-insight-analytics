@@ -201,6 +201,15 @@ describe("stability fallbacks", () => {
     expect(productSyncStatusText(result.products)).toBe("Synced 1 products");
   });
 
+  it("treats write_products as enough product read access during sync", async () => {
+    const db = dbWithProductColumns(["tags", "vendor", "productType", "shopifyUpdatedAt", "collections"]);
+    const result = await syncShopifyData(db, "shop_1", productAdmin(), { grantedScopes: "write_products,read_orders" });
+
+    expect(result.products.ok).toBe(true);
+    expect(result.products.count).toBe(1);
+    expect(result.orders.ok).toBe(true);
+  });
+
   it("returns safe fallbacks when Prisma delegates are missing", async () => {
     const db = {} as any;
 

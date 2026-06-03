@@ -8,7 +8,6 @@ embedded = true
 # Automatically updates application_url and redirect_urls when running
 # `shopify app dev` with a local tunnel (e.g. Cloudflare/ngrok).
 automatically_update_urls_on_dev = true
-include_config_on_deploy = true
 
 [access_scopes]
 scopes = "read_products,write_products,read_orders,read_content,write_content"

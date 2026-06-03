@@ -23,6 +23,7 @@ import { isSampleDataEnabled } from "~/lib/sample-data";
 import { isReviewerMode, buildSampleInsight } from "~/lib/reviewer-mode.server";
 import { authenticate } from "~/shopify.server";
 import { ANALYSIS_MESSAGE_LIMIT, parseStringArray } from "~/lib/utils";
+import { checkScopesForAction, REQUIRED_SYNC_SCOPES } from "~/lib/scope-guard.server";
 import {
   AppPage,
   DashboardSkeleton,
@@ -44,6 +45,14 @@ export async function action({ request }: ActionFunctionArgs) {
       return json({ ok: false as const, error: "Unknown intent" });
     }
     const shop = await ensureShop(prisma, session.shop);
+    const scopeCheck = checkScopesForAction(session, REQUIRED_SYNC_SCOPES);
+    if (!scopeCheck.ok) {
+      const missing = scopeCheck.missing.join(", ");
+      return json({
+        ok: false as const,
+        error: `Store data sync requires reauthorization. Missing scopes: ${missing}. Open the data hub to reauthorize and sync again.`,
+      });
+    }
     const autoSync = await syncShopifyData(prisma, shop.id, admin, {
       shopDomain: shop.shopDomain,
       grantedScopes: session.scope,
@@ -91,8 +100,12 @@ export async function action({ request }: ActionFunctionArgs) {
       await markOnboarded(prisma, shop.id);
     }
     const dataFound = (autoSync.products.count ?? 0) > 0 || (autoSync.messages ?? 0) > 0;
+    const syncErrors = [
+      autoSync.products.ok ? null : `Products: ${autoSync.products.error ?? autoSync.products.reason ?? "Shopify API returned an error"}`,
+      autoSync.orders.ok || autoSync.orders.skipped ? null : `Orders: ${autoSync.orders.error ?? autoSync.orders.reason ?? "Shopify API returned an error"}`,
+    ].filter(Boolean) as string[];
     const messageLimited = stored.length === ANALYSIS_MESSAGE_LIMIT;
-    return json({ ok: true as const, dataFound, autoSync, messageLimited });
+    return json({ ok: true as const, dataFound, autoSync, syncErrors, messageLimited });
   } catch (error) {
     if (error instanceof Response) throw error;
     console.error("Auto-sync action failed", error);
@@ -189,6 +202,8 @@ export default function Dashboard() {
   const syncAttempted = Boolean(syncer.data);
   const syncError = syncer.data && "ok" in syncer.data && !syncer.data.ok
     ? (syncer.data as { ok: false; error: string }).error
+    : syncer.data && "ok" in syncer.data && syncer.data.ok && "syncErrors" in syncer.data
+      ? (syncer.data as { syncErrors?: string[] }).syncErrors?.join(" ")
     : null;
   const messageLimited = syncer.data && "ok" in syncer.data && syncer.data.ok && "messageLimited" in syncer.data
     ? (syncer.data as { messageLimited?: boolean }).messageLimited

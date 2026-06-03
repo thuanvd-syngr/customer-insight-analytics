@@ -40,6 +40,13 @@ export function getMissingFromRequired(
   });
 }
 
+export function hasRequiredScope(
+  grantedScopeStr: string | null | undefined,
+  scope: string,
+): boolean {
+  return getMissingFromRequired(grantedScopeStr, [scope]).length === 0;
+}
+
 /**
  * For loaders: throws a redirect to /auth when any required scope is missing.
  * The /auth route re-runs authenticate.admin() which detects the stale session
