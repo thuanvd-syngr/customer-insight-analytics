@@ -1,6 +1,14 @@
 /** Maximum number of messages loaded into memory for a single analysis pass. */
 export const ANALYSIS_MESSAGE_LIMIT = 10_000;
 
+export const ANALYSIS_EXCLUDED_MESSAGE_SOURCES = ["product_text", "product_tags"] as const;
+
+export function isAnalysisMessageSource(source: string): boolean {
+  return !ANALYSIS_EXCLUDED_MESSAGE_SOURCES.includes(
+    source as (typeof ANALYSIS_EXCLUDED_MESSAGE_SOURCES)[number],
+  );
+}
+
 /**
  * Process an array of items in sequential batches of `batchSize`.
  * Each batch runs concurrently; batches run one after another.

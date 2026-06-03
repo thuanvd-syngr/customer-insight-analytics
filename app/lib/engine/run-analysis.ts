@@ -9,15 +9,14 @@ import { detectRevenueLeakage } from "./revenue-leakage";
 import { dailyVolume } from "./trend";
 import { buildQuestionOpportunities, buildRecommendedActions, buildRevenueOpportunity } from "~/lib/revenue-opportunity.server";
 import { buildCompetitorThreats, buildContentGapAnalysis, buildStorewideOpportunities } from "~/lib/recovery-engine.server";
+import { isAnalysisMessageSource } from "~/lib/utils";
 
 export function runAnalysis(input: AnalysisInput): InsightResult {
   const now = input.now ?? new Date();
   const windowDays = input.windowDays ?? 30;
   const start = now.getTime() - windowDays * 86_400_000;
   const eligibleCustomerMessages = input.messages.filter(
-    (message) =>
-      message.source !== "product_text" &&
-      message.source !== "product_tags",
+    (message) => isAnalysisMessageSource(message.source),
   );
   const windowedCustomerMessages = eligibleCustomerMessages.filter(
     (message) =>

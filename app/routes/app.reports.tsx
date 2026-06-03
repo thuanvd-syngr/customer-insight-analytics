@@ -82,13 +82,14 @@ export async function loader({ request }: LoaderFunctionArgs) {
         ? appSetting.findUnique({ where: { shopId_key: { shopId: shop.id, key: "reportEmail" } } })
         : Promise.resolve(null),
     ]);
-  const latestInsight = latestRun ? parseRun(latestRun) : null;
+  const hasAnalyzedQuestions = (latestRun?.messageCount ?? 0) > 0;
+  const latestInsight = hasAnalyzedQuestions ? parseRun(latestRun) : null;
   const roiEstimate = latestInsight ? buildROIEstimate(latestInsight, publishedCounts) : null;
   return json({
     reports,
     weeklyEmails,
     latestInsight,
-    hasRun: Boolean(latestRun),
+    hasRun: hasAnalyzedQuestions,
     plan,
     canExport: canExportReport(plan).allowed,
     publishedCounts,
@@ -200,7 +201,8 @@ export async function action({ request }: ActionFunctionArgs) {
 
   const now = new Date();
   const run = await getLatestRun(prisma, shop.id);
-  const insight = parseRun(run);
+  const hasAnalyzedQuestions = (run?.messageCount ?? 0) > 0;
+  const insight = hasAnalyzedQuestions ? parseRun(run) : null;
   if (!run || !insight) return redirect("/app/import");
 
   const weekEnd = now.toISOString().slice(0, 10);

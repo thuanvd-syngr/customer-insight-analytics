@@ -187,11 +187,12 @@ export async function loader({ request }: LoaderFunctionArgs) {
     // Fetch gating data first so sampleMode can be derived before the rest.
     // sampleMode mirrors the dashboard guard: only activate when there is truly
     // no data, matching the behaviour in app._index.tsx.
-    const [latestRun, existingMessageCount] = await Promise.all([
+    const [latestRun, existingLocalData] = await Promise.all([
       getLatestRun(prisma, shop.id),
       prisma.importedMessage.count({ where: { shopId: shop.id } }),
     ]);
-    const sampleMode = !latestRun && existingMessageCount === 0
+    const hasAnalyzedQuestions = (latestRun?.messageCount ?? 0) > 0;
+    const sampleMode = !latestRun && existingLocalData === 0
       ? await isReviewerMode(prisma, shop.id)
       : false;
     const [publishedCounts, generatedFaqs, draftSetting] = await Promise.all([
@@ -208,13 +209,13 @@ export async function loader({ request }: LoaderFunctionArgs) {
         ? Promise.resolve(null)
         : appSetting.findUnique({ where: { shopId_key: { shopId: shop.id, key: "recoveryPageDrafts" } } }),
     ]);
-    const insight = normalizeInsightResult(sampleMode ? buildSampleInsight() : (parseRun(latestRun) ?? EMPTY_INSIGHT));
+    const insight = normalizeInsightResult(sampleMode ? buildSampleInsight() : (hasAnalyzedQuestions ? parseRun(latestRun) : EMPTY_INSIGHT));
     const counts = publishedCounts as PublishedCountsLike;
     const faqs = generatedFaqs as GeneratedFaqLike[];
     const plan = buildRecoveryPlan({ insight, publishedCounts: counts, generatedFaqs: faqs });
     const score = calculateRecoveryScoreImprovement({ insight, publishedCounts: counts, generatedFaqs: faqs });
     return json({
-      hasRun: Boolean(latestRun) || sampleMode,
+      hasRun: hasAnalyzedQuestions || sampleMode,
       isSampleMode: sampleMode,
       insight,
       plan,
@@ -260,8 +261,14 @@ export async function action({ request }: ActionFunctionArgs) {
       return json<ActionResult>({ summary: { createdFaqs: 5, pageDrafts: 4, sampleOnly: true } });
     }
     const latestRun = await getLatestRun(prisma, shop.id);
-    const insight = normalizeInsightResult(parseRun(latestRun) ?? EMPTY_INSIGHT);
+    const hasAnalyzedQuestions = (latestRun?.messageCount ?? 0) > 0;
+    const insight = normalizeInsightResult(hasAnalyzedQuestions ? parseRun(latestRun) : EMPTY_INSIGHT);
     if (intent === "generate-plan") {
+      if (!hasAnalyzedQuestions) {
+        return json<ActionResult>({
+          error: "Run analysis with imported customer questions before generating a recovery plan.",
+        });
+      }
       return json<ActionResult>({ summary: await createRecoveryDrafts({ shopId: shop.id, insight }) });
     }
     if (intent === "install-pack") {

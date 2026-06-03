@@ -26,11 +26,12 @@ import {
 import prisma from "~/db.server";
 import { productRecoveryPath } from "~/lib/action-loading";
 import { ensureShop, getLatestRun, parseRun } from "~/lib/shop.server";
-import { EMPTY_INSIGHT } from "~/lib/types";
+import { EMPTY_INSIGHT, normalizeInsightResult } from "~/lib/types";
 import type { LeakageSeverity } from "~/lib/types";
 import { authenticate } from "~/shopify.server";
 import { safeCount } from "~/lib/prisma-safe";
 import { isReviewerMode, buildSampleInsight } from "~/lib/reviewer-mode.server";
+import { ANALYSIS_EXCLUDED_MESSAGE_SOURCES } from "~/lib/utils";
 
 export async function loader({ request }: LoaderFunctionArgs) {
   try {
@@ -38,14 +39,17 @@ export async function loader({ request }: LoaderFunctionArgs) {
     const shop = await ensureShop(prisma, session.shop);
     const [productCount, importedMessageCount] = await Promise.all([
       safeCount(prisma, "shopifyProduct", { where: { shopId: shop.id } }),
-      safeCount(prisma, "importedMessage", { where: { shopId: shop.id } }),
+      safeCount(prisma, "importedMessage", {
+        where: { shopId: shop.id, source: { notIn: [...ANALYSIS_EXCLUDED_MESSAGE_SOURCES] } },
+      }),
     ]);
     const latestRun = await getLatestRun(prisma, shop.id);
+    const hasAnalyzedQuestions = (latestRun?.messageCount ?? 0) > 0;
     const sampleMode = !latestRun && importedMessageCount === 0
       ? await isReviewerMode(prisma, shop.id)
       : false;
     return json({
-      insight: sampleMode ? buildSampleInsight() : (parseRun(latestRun) ?? EMPTY_INSIGHT),
+      insight: normalizeInsightResult(sampleMode ? buildSampleInsight() : (hasAnalyzedQuestions ? parseRun(latestRun) : EMPTY_INSIGHT)),
       productCount,
       importedMessageCount,
       isSampleMode: sampleMode,

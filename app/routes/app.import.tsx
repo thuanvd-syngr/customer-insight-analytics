@@ -42,7 +42,7 @@ import { getDelegate, safeCount } from "~/lib/prisma-safe";
 import { logUsage } from "~/lib/log-usage.server";
 import { orderSyncStatusText, productSyncStatusText } from "~/lib/sync-status";
 import { getShopifyProductSchemaDiagnostics } from "~/lib/schema-diagnostics.server";
-import { ANALYSIS_MESSAGE_LIMIT, parseStringArray } from "~/lib/utils";
+import { ANALYSIS_EXCLUDED_MESSAGE_SOURCES, ANALYSIS_MESSAGE_LIMIT, parseStringArray } from "~/lib/utils";
 import {
   checkExpiringOfflineTokenForAction,
   requireScopesOrRedirect,
@@ -86,8 +86,12 @@ export async function loader({ request }: LoaderFunctionArgs) {
     const debugMode = process.env.NODE_ENV !== "production" ? url.searchParams.get("debug") : null;
     const now = new Date();
     const usage = await getUsageSnapshot(prisma, shop.id, plan, now);
+    const customerQuestionWhere = {
+      shopId: shop.id,
+      source: { notIn: [...ANALYSIS_EXCLUDED_MESSAGE_SOURCES] },
+    };
     const [recentMessageCount, productCount, orderCount, latestRun] = await Promise.all([
-      safeCount(prisma, "importedMessage", { where: { shopId: shop.id } }),
+      safeCount(prisma, "importedMessage", { where: customerQuestionWhere }),
       safeCount(prisma, "shopifyProduct", { where: { shopId: shop.id } }),
       safeCount(prisma, "shopifyOrder", { where: { shopId: shop.id } }),
       getLatestRun(prisma, shop.id),
@@ -262,7 +266,9 @@ export async function action({ request }: ActionFunctionArgs) {
     // Stale detection: products or messages changed since the last analysis snapshot.
     // When stale, bypass the weekly limit — new data requires fresh analysis.
     const [currentMessageCount, currentProductCountForStale, latestRunForStale] = await Promise.all([
-      safeCount(prisma, "importedMessage", { where: { shopId: shop.id } }),
+      safeCount(prisma, "importedMessage", {
+        where: { shopId: shop.id, source: { notIn: [...ANALYSIS_EXCLUDED_MESSAGE_SOURCES] } },
+      }),
       safeCount(prisma, "shopifyProduct", { where: { shopId: shop.id } }),
       getLatestRun(prisma, shop.id),
     ]);
@@ -270,12 +276,17 @@ export async function action({ request }: ActionFunctionArgs) {
       currentMessageCount !== (latestRunForStale.messageCount ?? 0) ||
       currentProductCountForStale !== (latestRunForStale.productCount ?? 0)
     );
+    if (currentMessageCount === 0) {
+      return json({
+        error: "No customer questions found yet. Syncing products is useful, but analysis needs imported chats, emails, support messages, or order notes.",
+      });
+    }
     const gate = canRunAnalysis(usage, { bypass: isDevMode || isDataStale });
     if (!gate.allowed) return json({ error: gate.reason }, { status: 403 });
     const importedMessage = getDelegate(prisma, "importedMessage");
     const stored = importedMessage?.findMany
       ? await importedMessage.findMany({
-          where: { shopId: shop.id },
+          where: { shopId: shop.id, source: { notIn: [...ANALYSIS_EXCLUDED_MESSAGE_SOURCES] } },
           take: ANALYSIS_MESSAGE_LIMIT,
           orderBy: { occurredAt: "desc" },
         })

@@ -22,7 +22,7 @@ import { getPublishedCounts } from "~/lib/publish/shopify-publisher.server";
 import { isSampleDataEnabled } from "~/lib/sample-data";
 import { isReviewerMode, buildSampleInsight } from "~/lib/reviewer-mode.server";
 import { authenticate } from "~/shopify.server";
-import { ANALYSIS_MESSAGE_LIMIT, parseStringArray } from "~/lib/utils";
+import { ANALYSIS_EXCLUDED_MESSAGE_SOURCES, ANALYSIS_MESSAGE_LIMIT, parseStringArray } from "~/lib/utils";
 import {
   checkExpiringOfflineTokenForAction,
   checkScopesForAction,
@@ -71,7 +71,7 @@ export async function action({ request }: ActionFunctionArgs) {
     });
     const [stored, storedProducts, settings, totalProductCount] = await Promise.all([
       prisma.importedMessage.findMany({
-        where: { shopId: shop.id },
+        where: { shopId: shop.id, source: { notIn: [...ANALYSIS_EXCLUDED_MESSAGE_SOURCES] } },
         take: ANALYSIS_MESSAGE_LIMIT,
         orderBy: { occurredAt: "desc" },
       }),
@@ -79,7 +79,7 @@ export async function action({ request }: ActionFunctionArgs) {
       prisma.appSetting.findMany({ where: { shopId: shop.id } }),
       prisma.shopifyProduct.count({ where: { shopId: shop.id } }),
     ]);
-    if (stored.length > 0 || storedProducts.length > 0) {
+    if (stored.length > 0) {
       const settingValues = Object.fromEntries(settings.map((s) => [s.key, s.value]));
       const competitorTerms = String(settingValues.competitorTerms ?? "")
         .split(/[\n,]/)
@@ -131,16 +131,24 @@ export async function loader({ request }: LoaderFunctionArgs) {
     const shop = await ensureShop(prisma, session.shop);
     const tokenCheck = checkExpiringOfflineTokenForAction(session);
     const latestRun = await getLatestRun(prisma, shop.id);
-    const existingLocalData = await prisma.importedMessage.count({ where: { shopId: shop.id } });
+    const [existingCustomerQuestions, existingLocalData] = await Promise.all([
+      prisma.importedMessage.count({
+        where: { shopId: shop.id, source: { notIn: [...ANALYSIS_EXCLUDED_MESSAGE_SOURCES] } },
+      }),
+      prisma.importedMessage.count({ where: { shopId: shop.id } }),
+    ]);
+    const hasAnalyzedQuestions = (latestRun?.messageCount ?? 0) > 0;
     const autoSyncNeeded = tokenCheck.ok && !latestRun && existingLocalData === 0;
     const sampleMode = !latestRun && existingLocalData === 0
       ? await isReviewerMode(prisma, shop.id)
       : false;
     const insight = normalizeInsightResult(
-      sampleMode ? buildSampleInsight() : (parseRun(latestRun) ?? EMPTY_INSIGHT),
+      sampleMode ? buildSampleInsight() : (hasAnalyzedQuestions ? parseRun(latestRun) : EMPTY_INSIGHT),
     );
     const [importedMessages, orderCount, productCount, publishedCounts] = await Promise.all([
-      prisma.importedMessage.count({ where: { shopId: shop.id } }),
+      prisma.importedMessage.count({
+        where: { shopId: shop.id, source: { notIn: [...ANALYSIS_EXCLUDED_MESSAGE_SOURCES] } },
+      }),
       prisma.shopifyOrder.count({ where: { shopId: shop.id } }),
       prisma.shopifyProduct.count({ where: { shopId: shop.id } }),
       getPublishedCounts(prisma, shop.id),
@@ -154,7 +162,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     });
     const usage = await getUsageSnapshot(prisma, shop.id, plan, new Date());
     return json({
-      ...buildDashboardViewModel({ insight, importedMessages, hasRun: Boolean(latestRun) || sampleMode }),
+      ...buildDashboardViewModel({ insight, importedMessages, hasRun: hasAnalyzedQuestions || sampleMode }),
       orderCount,
       productCount,
       publishedTotal: publishedCounts.total,
