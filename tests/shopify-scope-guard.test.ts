@@ -8,23 +8,54 @@ import {
   REQUIRED_SYNC_SCOPES,
 } from "~/lib/scope-guard.server";
 
-// The stale scope string that reproduces the reported production bug:
-// session.scope = read_orders,write_content,write_products
-// (missing read_products and read_content)
-const STALE_SCOPE = "read_orders,write_content,write_products";
+// The scope Shopify actually grants when the app requests write_products and
+// write_content — Shopify omits the corresponding read_* scopes because the
+// write scope implies them. After the implied-scope fix, this is HEALTHY.
+const SHOPIFY_GRANTED_SCOPE = "read_orders,write_content,write_products";
+
+// A session that is genuinely stale: missing read_orders (no write scope implies it).
+const TRULY_STALE_SCOPE = "write_products,write_content";
+
+// A session missing write_products (and therefore read_products too, since no implied grant).
+const NO_PRODUCT_SCOPE = "read_orders,write_content";
+
+// A session missing write_content (and therefore read_content too).
+const NO_CONTENT_SCOPE = "read_orders,write_products";
+
 const FULL_SCOPE = "read_products,write_products,read_orders,read_content,write_content";
 
 const SESSION = { shop: "test.myshopify.com", id: "sess_abc123" };
 
 describe("getMissingFromRequired", () => {
-  it("stale session missing read_products is detected", () => {
-    const missing = getMissingFromRequired(STALE_SCOPE, REQUIRED_APP_SCOPES);
-    expect(missing).toContain("read_products");
+  it("write_products satisfies read_products — not treated as missing", () => {
+    const missing = getMissingFromRequired(SHOPIFY_GRANTED_SCOPE, REQUIRED_APP_SCOPES);
+    expect(missing).not.toContain("read_products");
   });
 
-  it("stale session missing read_content is detected", () => {
-    const missing = getMissingFromRequired(STALE_SCOPE, REQUIRED_APP_SCOPES);
+  it("write_content satisfies read_content — not treated as missing", () => {
+    const missing = getMissingFromRequired(SHOPIFY_GRANTED_SCOPE, REQUIRED_APP_SCOPES);
+    expect(missing).not.toContain("read_content");
+  });
+
+  it("Shopify-granted scope (read_orders,write_content,write_products) is fully satisfied", () => {
+    expect(getMissingFromRequired(SHOPIFY_GRANTED_SCOPE, REQUIRED_APP_SCOPES)).toEqual([]);
+  });
+
+  it("read_products is missing when neither read_products nor write_products is granted", () => {
+    const missing = getMissingFromRequired(NO_PRODUCT_SCOPE, REQUIRED_APP_SCOPES);
+    expect(missing).toContain("read_products");
+    expect(missing).toContain("write_products");
+  });
+
+  it("read_content is missing when neither read_content nor write_content is granted", () => {
+    const missing = getMissingFromRequired(NO_CONTENT_SCOPE, REQUIRED_APP_SCOPES);
     expect(missing).toContain("read_content");
+    expect(missing).toContain("write_content");
+  });
+
+  it("read_orders still requires explicit grant — not implied by any write scope", () => {
+    const missing = getMissingFromRequired(TRULY_STALE_SCOPE, REQUIRED_APP_SCOPES);
+    expect(missing).toContain("read_orders");
   });
 
   it("full session returns no missing scopes", () => {
@@ -48,10 +79,24 @@ describe("getMissingFromRequired", () => {
 });
 
 describe("requireScopesOrRedirect", () => {
-  it("throws a redirect to /auth/reauthorize when scopes are missing", () => {
+  it("does not throw for Shopify-granted scope — write_* implies read_*", () => {
+    expect(() => {
+      requireScopesOrRedirect({ ...SESSION, scope: SHOPIFY_GRANTED_SCOPE });
+    }).not.toThrow();
+  });
+
+  it("sessionHealthy true for read_orders,write_content,write_products", () => {
+    // This is the scope Shopify was granting in production. After the implied-scope
+    // fix it must not trigger a reauthorize redirect.
+    expect(() => {
+      requireScopesOrRedirect({ ...SESSION, scope: "read_orders,write_content,write_products" });
+    }).not.toThrow();
+  });
+
+  it("throws a redirect to /auth/reauthorize when read_orders is missing", () => {
     let thrown: unknown;
     try {
-      requireScopesOrRedirect({ ...SESSION, scope: STALE_SCOPE });
+      requireScopesOrRedirect({ ...SESSION, scope: TRULY_STALE_SCOPE });
     } catch (e) {
       thrown = e;
     }
@@ -64,7 +109,7 @@ describe("requireScopesOrRedirect", () => {
   it("includes the shop domain in the reauthorize redirect URL", () => {
     let thrown: unknown;
     try {
-      requireScopesOrRedirect({ shop: "my-store.myshopify.com", id: "sess_xyz", scope: STALE_SCOPE });
+      requireScopesOrRedirect({ shop: "my-store.myshopify.com", id: "sess_xyz", scope: TRULY_STALE_SCOPE });
     } catch (e) {
       thrown = e;
     }
@@ -72,17 +117,16 @@ describe("requireScopesOrRedirect", () => {
     expect(location).toContain("my-store.myshopify.com");
   });
 
-  it("does not throw when all required scopes are present", () => {
+  it("does not throw when all required scopes are present explicitly", () => {
     expect(() => {
       requireScopesOrRedirect({ ...SESSION, scope: FULL_SCOPE });
     }).not.toThrow();
   });
 
-  it("throws when only one scope is missing — not just when all are missing", () => {
-    const oneScoped = "read_products,write_products,read_orders,write_content"; // missing read_content
+  it("throws when write_products is absent and read_products is also absent", () => {
     let thrown: unknown;
     try {
-      requireScopesOrRedirect({ ...SESSION, scope: oneScoped });
+      requireScopesOrRedirect({ ...SESSION, scope: NO_PRODUCT_SCOPE });
     } catch (e) {
       thrown = e;
     }
@@ -91,9 +135,19 @@ describe("requireScopesOrRedirect", () => {
 });
 
 describe("checkScopesForAction — stale session blocks sync", () => {
-  it("returns ok:false and lists missing read_products when stale", () => {
+  it("returns ok:true for Shopify-granted scope — write_products satisfies read_products for sync", () => {
+    // SHOPIFY_GRANTED_SCOPE has write_products which implies read_products.
+    // Sync must be allowed; this was the false-positive that triggered the fix.
     const result = checkScopesForAction(
-      { ...SESSION, scope: STALE_SCOPE },
+      { ...SESSION, scope: SHOPIFY_GRANTED_SCOPE },
+      REQUIRED_SYNC_SCOPES,
+    );
+    expect(result.ok).toBe(true);
+  });
+
+  it("returns ok:false and lists missing read_products when neither read_products nor write_products granted", () => {
+    const result = checkScopesForAction(
+      { ...SESSION, scope: NO_PRODUCT_SCOPE },
       REQUIRED_SYNC_SCOPES,
     );
     expect(result.ok).toBe(false);
@@ -113,9 +167,9 @@ describe("checkScopesForAction — stale session blocks sync", () => {
     }
   });
 
-  it("returns ok:false when only read_products is missing", () => {
+  it("returns ok:false when write_products is absent and read_products absent — both are missing", () => {
     const result = checkScopesForAction(
-      { ...SESSION, scope: "read_orders,write_products,write_content" },
+      { ...SESSION, scope: "read_orders,write_content" },
       REQUIRED_SYNC_SCOPES,
     );
     expect(result.ok).toBe(false);
@@ -132,18 +186,25 @@ describe("checkScopesForAction — stale session blocks sync", () => {
     expect(result.ok).toBe(true);
   });
 
-  it("reports all missing scopes in a single call", () => {
+  it("reports only genuinely missing scopes — no false positives for implied scopes", () => {
+    // SHOPIFY_GRANTED_SCOPE should report zero missing scopes for the full set.
     const result = checkScopesForAction(
-      { ...SESSION, scope: STALE_SCOPE },
+      { ...SESSION, scope: SHOPIFY_GRANTED_SCOPE },
+      Array.from(REQUIRED_APP_SCOPES),
+    );
+    expect(result.ok).toBe(true);
+  });
+
+  it("reports read_orders as missing when the session truly lacks it", () => {
+    const result = checkScopesForAction(
+      { ...SESSION, scope: TRULY_STALE_SCOPE },
       Array.from(REQUIRED_APP_SCOPES),
     );
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.missing).toContain("read_products");
-      expect(result.missing).toContain("read_content");
-      expect(result.missing).not.toContain("read_orders");
-      expect(result.missing).not.toContain("write_content");
-      expect(result.missing).not.toContain("write_products");
+      expect(result.missing).toContain("read_orders");
+      expect(result.missing).not.toContain("read_products");
+      expect(result.missing).not.toContain("read_content");
     }
   });
 });

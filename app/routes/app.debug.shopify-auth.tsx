@@ -3,7 +3,7 @@ import { json } from "@remix-run/node";
 import { useLoaderData } from "@remix-run/react";
 
 import prisma from "~/db.server";
-import { REQUIRED_APP_SCOPES, REQUIRED_SYNC_SCOPES, getMissingFromRequired } from "~/lib/scope-guard.server";
+import { REQUIRED_APP_SCOPES, REQUIRED_SYNC_SCOPES, SCOPE_IMPLIED_BY, getMissingFromRequired } from "~/lib/scope-guard.server";
 import { authenticate } from "~/shopify.server";
 
 export async function loader({ request }: LoaderFunctionArgs) {
@@ -35,6 +35,18 @@ export async function loader({ request }: LoaderFunctionArgs) {
     },
   });
 
+  const scopeMatrix = Array.from(REQUIRED_APP_SCOPES).map((scope) => {
+    const impliedBy = SCOPE_IMPLIED_BY[scope] ?? null;
+    const directlyGranted = grantedScopeList.includes(scope);
+    const satisfiedByImplication = !directlyGranted && impliedBy !== null && grantedScopeList.includes(impliedBy);
+    return {
+      scope,
+      directlyGranted,
+      satisfiedBy: satisfiedByImplication ? impliedBy : null,
+      satisfied: directlyGranted || satisfiedByImplication,
+    };
+  });
+
   const scopeMatch = {
     envVsRequired: {
       envScopes: envScopeList,
@@ -44,6 +56,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     },
     sessionVsRequired: {
       granted: grantedScopeList,
+      scopeMatrix,
       missingRequired,
       missingSyncScopes,
       missingFromEnv,

@@ -10,6 +10,16 @@ export const REQUIRED_APP_SCOPES = [
 
 export const REQUIRED_SYNC_SCOPES = ["read_products", "read_orders"] as const;
 
+// Shopify implicitly grants read access when the corresponding write scope is
+// approved. Granting write_products also satisfies read_products usage, and
+// write_content also satisfies read_content usage. This mirrors Shopify's own
+// scope resolution so we do not false-positive on sessions that Shopify itself
+// considers fully authorised.
+export const SCOPE_IMPLIED_BY: Record<string, string> = {
+  read_products: "write_products",
+  read_content: "write_content",
+};
+
 type SessionLike = { shop: string; id: string; scope?: string | null };
 
 function parseScopeSet(scopeStr: string | null | undefined): Set<string> {
@@ -23,7 +33,11 @@ export function getMissingFromRequired(
   required: readonly string[],
 ): string[] {
   const granted = parseScopeSet(grantedScopeStr);
-  return Array.from(required).filter((s) => !granted.has(s));
+  return Array.from(required).filter((s) => {
+    if (granted.has(s)) return false;
+    const impliedBy = SCOPE_IMPLIED_BY[s];
+    return !(impliedBy && granted.has(impliedBy));
+  });
 }
 
 /**
