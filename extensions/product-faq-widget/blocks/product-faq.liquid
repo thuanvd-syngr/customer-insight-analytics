@@ -2,15 +2,19 @@
   Product FAQ App Block — Customer Insight Analytics
   Renders product-specific FAQs with optional accordion style and JSON-LD schema.
   Settings: accordion, max_faqs, show_shipping, show_return, show_warranty, show_payment
+
+  The faq_json metafield must be type "json" — Shopify's Liquid engine parses .value
+  into a native array automatically, so no parse_json filter is needed or supported.
 {% endcomment %}
 
 {%- assign ns = 'cia-faq' -%}
 {%- assign faq_metafield = product.metafields.customer_insight.faq_json -%}
-{%- assign raw_faqs = faq_metafield.value | default: '[]' -%}
+{%- assign faqs = faq_metafield.value -%}
 
-{%- if raw_faqs == '[]' or raw_faqs == blank -%}
+{%- if faqs == blank or faqs.size == 0 -%}
   {%- comment %} No FAQs — render nothing so theme is unaffected {% endcomment -%}
 {%- else -%}
+  {%- assign max = block.settings.max_faqs | default: 6 | plus: 0 -%}
 
 <div
   class="cia-faq-block"
@@ -21,8 +25,6 @@
   <h3 class="cia-faq-heading">{{ block.settings.heading | default: 'Frequently Asked Questions' }}</h3>
 
   <div class="cia-faq-list">
-    {%- assign faqs = raw_faqs | parse_json -%}
-    {%- assign max = block.settings.max_faqs | default: 6 | plus: 0 -%}
     {%- assign count = 0 -%}
     {%- for faq in faqs -%}
       {%- if count >= max -%}{%- break -%}{%- endif -%}
@@ -56,19 +58,19 @@
       "@context": "https://schema.org",
       "@type": "FAQPage",
       "mainEntity": [
+        {%- assign ld_count = 0 -%}
         {%- for faq in faqs -%}
-          {%- if forloop.index0 < max -%}
-            {%- unless forloop.first == false and forloop.index0 == 0 -%}{%- endunless -%}
-            {%- if forloop.index0 > 0 -%},{%- endif -%}
-            {
-              "@type": "Question",
-              "name": {{ faq.question | json }},
-              "acceptedAnswer": {
-                "@type": "Answer",
-                "text": {{ faq.answer | json }}
-              }
+          {%- if ld_count >= max -%}{%- break -%}{%- endif -%}
+          {%- if ld_count > 0 -%},{%- endif -%}
+          {
+            "@type": "Question",
+            "name": {{ faq.question | json }},
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": {{ faq.answer | json }}
             }
-          {%- endif -%}
+          }
+          {%- assign ld_count = ld_count | plus: 1 -%}
         {%- endfor -%}
       ]
     }
@@ -128,11 +130,6 @@
       "id": "show_payment",
       "label": "Include payment FAQs",
       "default": false
-    }
-  ],
-  "presets": [
-    {
-      "name": "Product FAQ"
     }
   ]
 }

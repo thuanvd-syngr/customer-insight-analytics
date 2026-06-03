@@ -557,7 +557,7 @@ export default function RecoveryAutomation() {
 
         {insight.revenueOpportunity.monthlyAtRisk > 0 ? (
           <Banner tone="info" title={`You have ${money(insight.revenueOpportunity.monthlyAtRisk)}/mo revenue at risk.`}>
-            <p>Growth merchants typically recover $500-$2,000/mo when they publish the highest-impact recovery content first.</p>
+            <p>Publishing high-impact recovery content helps address buying objections. Results vary by store, traffic, and product category.</p>
           </Banner>
         ) : null}
       </BlockStack>

@@ -6,4 +6,4 @@ type = "admin_link"
 
 [[extensions.targeting]]
 target = "admin.product-details.action.link"
-url = "/app/products/{id}/optimize"
+url = "/app/products"

@@ -108,7 +108,7 @@ export default function Billing() {
   return (
     <AppPage
       title="Plans & Billing"
-      subtitle="Most merchants on Growth recover $500–$2,000/mo in revenue. The plan pays for itself."
+      subtitle="Identify buying objections and prepare recovery content. Results vary by store, traffic, and product category."
       primaryAction={
         plan !== "growth" ? (
           <Form method="post">
@@ -153,12 +153,12 @@ export default function Billing() {
               <BlockStack gap="200">
                 <Text as="h3" variant="headingMd">Does the plan pay for itself?</Text>
                 <Text as="p" variant="bodyMd" tone="subdued">
-                  Yes. Growth gives you FAQ publishing, competitor intelligence, and weekly recovery reports. Answering even one high-frequency buying objection typically recovers more than the monthly plan cost within the first week.
+                  Growth gives you FAQ publishing, competitor intelligence, and weekly recovery reports. Addressing high-frequency buying objections can improve conversion over time. Results vary by store and product category.
                 </Text>
                 <InlineStack gap="200" wrap>
                   <Badge tone="success">$49/mo Growth plan</Badge>
-                  <Badge tone="info">Average merchant recovers $500–$2,000/mo</Badge>
-                  <Badge tone="success">ROI in the first week</Badge>
+                  <Badge tone="info">Identifies buying objections</Badge>
+                  <Badge tone="success">FAQ + competitor + recovery reports</Badge>
                 </InlineStack>
               </BlockStack>
             </Card>
