@@ -45,7 +45,6 @@ import { getShopifyProductSchemaDiagnostics } from "~/lib/schema-diagnostics.ser
 import { ANALYSIS_MESSAGE_LIMIT, parseStringArray } from "~/lib/utils";
 import {
   checkExpiringOfflineTokenForAction,
-  requireExpiringOfflineTokenOrRedirect,
   requireScopesOrRedirect,
   checkScopesForAction,
   REQUIRED_SYNC_SCOPES,
@@ -81,7 +80,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     // Enforce required scopes. Throws a redirect to /auth?shop=... if any are
     // missing, which re-triggers the OAuth flow for the full scope grant.
     requireScopesOrRedirect(session, REQUIRED_APP_SCOPES);
-    requireExpiringOfflineTokenOrRedirect(session);
+    const tokenCheck = checkExpiringOfflineTokenForAction(session);
 
     const url = new URL(request.url);
     const debugMode = process.env.NODE_ENV !== "production" ? url.searchParams.get("debug") : null;
@@ -128,6 +127,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
       analysisGateAllowed: analysisGate.allowed,
       isDevMode,
       lastSync: null,
+      reauthorizeRequired: !tokenCheck.ok,
+      reauthorizeUrl: tokenCheck.ok ? null : tokenCheck.reauthorizeUrl,
+      reauthorizeReason: tokenCheck.ok ? null : tokenCheck.reason,
       loadError: null,
       sampleDataEnabled: isSampleDataEnabled(),
       analysisDebug,
@@ -159,6 +161,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
       analysisGateAllowed: true,
       isDevMode: process.env.NODE_ENV !== "production",
       lastSync: null,
+      reauthorizeRequired: false,
+      reauthorizeUrl: null,
+      reauthorizeReason: null,
       loadError: "Some data could not be loaded. Your store data is safe. Try refreshing or run analysis again.",
       sampleDataEnabled: isSampleDataEnabled(),
       analysisDebug: null,
@@ -325,7 +330,24 @@ export async function action({ request }: ActionFunctionArgs) {
 }
 
 export default function ImportPage() {
-  const { usage, recentMessageCount, productCount, orderCount, isDataStale, analysisGateAllowed, isDevMode, lastSync, loadError, sampleDataEnabled, analysisDebug, syncDebug, schemaDebug } = useLoaderData<typeof loader>();
+  const {
+    usage,
+    recentMessageCount,
+    productCount,
+    orderCount,
+    isDataStale,
+    analysisGateAllowed,
+    isDevMode,
+    lastSync,
+    reauthorizeRequired,
+    reauthorizeUrl,
+    reauthorizeReason,
+    loadError,
+    sampleDataEnabled,
+    analysisDebug,
+    syncDebug,
+    schemaDebug,
+  } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
   const [source, setSource] = useState("manual");
@@ -375,6 +397,12 @@ export default function ImportPage() {
               {loadError}
             </Text>
           </Card>
+        ) : null}
+        {reauthorizeRequired ? (
+          <Banner tone="warning" title="Reconnect Shopify sync">
+            <p>{reauthorizeReason}</p>
+            <Button url={reauthorizeUrl ?? "/app/import"} variant="primary">Reauthorize Shopify</Button>
+          </Banner>
         ) : null}
         {timeoutWarning ? (
           <Banner tone="warning" title="Action took longer than expected">

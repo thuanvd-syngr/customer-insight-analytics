@@ -25,7 +25,6 @@ import { authenticate } from "~/shopify.server";
 import { ANALYSIS_MESSAGE_LIMIT, parseStringArray } from "~/lib/utils";
 import {
   checkExpiringOfflineTokenForAction,
-  requireExpiringOfflineTokenOrRedirect,
   checkScopesForAction,
   REQUIRED_SYNC_SCOPES,
 } from "~/lib/scope-guard.server";
@@ -129,11 +128,11 @@ export async function action({ request }: ActionFunctionArgs) {
 export async function loader({ request }: LoaderFunctionArgs) {
   try {
     const { session } = await authenticate.admin(request);
-    requireExpiringOfflineTokenOrRedirect(session);
     const shop = await ensureShop(prisma, session.shop);
+    const tokenCheck = checkExpiringOfflineTokenForAction(session);
     const latestRun = await getLatestRun(prisma, shop.id);
     const existingLocalData = await prisma.importedMessage.count({ where: { shopId: shop.id } });
-    const autoSyncNeeded = !latestRun && existingLocalData === 0;
+    const autoSyncNeeded = tokenCheck.ok && !latestRun && existingLocalData === 0;
     const sampleMode = !latestRun && existingLocalData === 0
       ? await isReviewerMode(prisma, shop.id)
       : false;
@@ -160,6 +159,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
       productCount,
       publishedTotal: publishedCounts.total,
       autoSyncNeeded,
+      reauthorizeRequired: !tokenCheck.ok,
+      reauthorizeUrl: tokenCheck.ok ? null : tokenCheck.reauthorizeUrl,
+      reauthorizeReason: tokenCheck.ok ? null : tokenCheck.reason,
       loadError: null,
       sampleDataEnabled: isSampleDataEnabled(),
       isSampleMode: sampleMode,
@@ -173,6 +175,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
       productCount: 0,
       publishedTotal: 0,
       autoSyncNeeded: false,
+      reauthorizeRequired: false,
+      reauthorizeUrl: null,
+      reauthorizeReason: null,
       loadError: "Store data is loading. Refresh in a moment to see your recovery insights.",
       sampleDataEnabled: isSampleDataEnabled(),
       isSampleMode: false,
@@ -192,6 +197,9 @@ export default function Dashboard() {
     productCount,
     publishedTotal,
     autoSyncNeeded,
+    reauthorizeRequired,
+    reauthorizeUrl,
+    reauthorizeReason,
     loadError,
     sampleDataEnabled,
     isSampleMode,
@@ -244,6 +252,14 @@ export default function Dashboard() {
         {syncError ? (
           <Banner tone="warning" title="Data sync needs attention">
             <p>{syncError}</p>
+          </Banner>
+        ) : null}
+        {reauthorizeRequired ? (
+          <Banner tone="warning" title="Reconnect Shopify sync">
+            <p>{reauthorizeReason}</p>
+            <InlineStack gap="200">
+              <Button url={reauthorizeUrl ?? "/app/import"} variant="primary">Reauthorize Shopify</Button>
+            </InlineStack>
           </Banner>
         ) : null}
         <EmptyStateCard
@@ -380,6 +396,14 @@ export default function Dashboard() {
       {messageLimited ? (
         <Banner tone="info" title="Large message volume — analysis uses most recent 10,000">
           <p>Your store has more than 10,000 imported messages. Analysis is based on the most recent 10,000 for performance.</p>
+        </Banner>
+      ) : null}
+      {reauthorizeRequired ? (
+        <Banner tone="warning" title="Reconnect Shopify sync">
+          <p>{reauthorizeReason}</p>
+          <InlineStack gap="200">
+            <Button url={reauthorizeUrl ?? "/app/import"} variant="primary">Reauthorize Shopify</Button>
+          </InlineStack>
         </Banner>
       ) : null}
 
