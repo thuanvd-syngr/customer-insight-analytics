@@ -1,0 +1,48 @@
+client_id = "05a51df01391fee2c1379df0ecfbe042"
+name = "Customer Insight Analytics"
+handle = "customer-insight-analytics"
+application_url = "https://customer-insight-analytics-ww7zt533aa-as.a.run.app"
+embedded = true
+
+[build]
+# Automatically updates application_url and redirect_urls when running
+# `shopify app dev` with a local tunnel (e.g. Cloudflare/ngrok).
+automatically_update_urls_on_dev = true
+include_config_on_deploy = true
+
+[access_scopes]
+scopes = "read_products,write_products,read_orders,read_content,write_content"
+
+[auth]
+redirect_urls = [
+  "https://customer-insight-analytics-ww7zt533aa-as.a.run.app/auth/callback",
+  "https://customer-insight-analytics-ww7zt533aa-as.a.run.app/auth/shopify/callback"
+]
+
+[webhooks]
+api_version = "2026-01"
+
+[[webhooks.subscriptions]]
+topics = ["app/uninstalled"]
+uri = "/webhooks/app/uninstalled"
+
+[[webhooks.subscriptions]]
+topics = ["app/scopes_update"]
+uri = "/webhooks/app/scopes_update"
+
+[[webhooks.subscriptions]]
+topics = ["products/create"]
+uri = "/webhooks/products/create"
+
+[[webhooks.subscriptions]]
+topics = ["products/update"]
+uri = "/webhooks/products/update"
+
+[[webhooks.subscriptions]]
+topics = ["orders/create"]
+uri = "/webhooks/orders/create"
+
+# GDPR compliance webhooks are intentionally omitted here.
+# They require Shopify "Protected Customer Data" approval before deploy.
+# Add them back (using compliance_topics = [...]) in shopify.app.production.toml
+# after Partner Dashboard approval and re-enable that config for the App Store release.
