@@ -43,6 +43,7 @@ import { logUsage } from "~/lib/log-usage.server";
 import { orderSyncStatusText, productSyncStatusText } from "~/lib/sync-status";
 import { getShopifyProductSchemaDiagnostics } from "~/lib/schema-diagnostics.server";
 import { ANALYSIS_MESSAGE_LIMIT, parseStringArray } from "~/lib/utils";
+import { requireScopesOrRedirect, checkScopesForAction, REQUIRED_SYNC_SCOPES, REQUIRED_APP_SCOPES } from "~/lib/scope-guard.server";
 
 const CUSTOMER_APPROVAL_COPY = "Protected customer data approval required for customer profiles.";
 
@@ -69,6 +70,11 @@ async function shopContext(request: Request) {
 export async function loader({ request }: LoaderFunctionArgs) {
   try {
     const { shop, plan, session } = await shopContext(request);
+
+    // Enforce required scopes. Throws a redirect to /auth?shop=... if any are
+    // missing, which re-triggers the OAuth flow for the full scope grant.
+    requireScopesOrRedirect(session, REQUIRED_APP_SCOPES);
+
     const url = new URL(request.url);
     const debugMode = process.env.NODE_ENV !== "production" ? url.searchParams.get("debug") : null;
     const now = new Date();
@@ -131,6 +137,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
         : null,
     });
   } catch (error) {
+    // Re-throw Remix redirects (e.g. from requireScopesOrRedirect) so they
+    // are not swallowed by this error-fallback handler.
+    if (error instanceof Response) throw error;
     console.error("Import loader failed", error);
     return json({
       usage: { plan: "free", messagesThisMonth: 0, analysesThisWeek: 0, aiSummariesThisMonth: 0 },
@@ -213,6 +222,13 @@ export async function action({ request }: ActionFunctionArgs) {
   }
 
   if (intent === "sync") {
+    const scopeCheck = checkScopesForAction(session, REQUIRED_SYNC_SCOPES);
+    if (!scopeCheck.ok) {
+      const missing = scopeCheck.missing.join(", ");
+      return json({
+        error: `Sync requires reinstalling the app — missing scopes: ${missing}. Uninstall the app from Shopify Admin, then reinstall to reauthorize with the required scopes.`,
+      });
+    }
     const sync = await syncShopifyData(prisma, shop.id, admin, {
       shopDomain: shop.shopDomain,
       grantedScopes: session.scope,

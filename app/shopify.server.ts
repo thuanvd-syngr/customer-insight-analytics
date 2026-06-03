@@ -8,6 +8,7 @@ import { PrismaSessionStorage } from "@shopify/shopify-app-session-storage-prism
 
 import prisma from "./db.server";
 import { BILLING_CONFIG } from "./lib/billing/plans";
+import { getMissingFromRequired, REQUIRED_APP_SCOPES } from "./lib/scope-guard.server";
 import { ensureShop } from "./lib/shop.server";
 
 const shopify = shopifyApp({
@@ -22,6 +23,15 @@ const shopify = shopifyApp({
   billing: BILLING_CONFIG,
   hooks: {
     afterAuth: async ({ session }) => {
+      const missing = getMissingFromRequired(session.scope, REQUIRED_APP_SCOPES);
+      console.info("[afterAuth] OAuth completed", {
+        shop: session.shop,
+        sessionId: session.id,
+        grantedScopes: session.scope ?? "(none)",
+        envScopes: process.env.SCOPES ?? "(SCOPES env var not set)",
+        missingRequiredScopes: missing,
+        reauthNeeded: missing.length > 0,
+      });
       await ensureShop(prisma, session.shop);
     },
   },
