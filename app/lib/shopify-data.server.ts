@@ -15,11 +15,21 @@ async function graph<T>(
   admin: AdminLike,
   query: string,
   variables: Record<string, unknown>,
+  context?: { shop?: string; operation?: string },
 ): Promise<T> {
   const res = await admin.graphql(query, { variables });
-  const body = (await res.json()) as T & { errors?: Array<{ message: string }> };
+  const body = (await res.json()) as T & {
+    errors?: Array<{ message: string; extensions?: { code?: string } }>;
+    extensions?: { cost?: unknown };
+  };
   if (body.errors?.length) {
-    throw new Error(body.errors.map((error) => error.message).join("; "));
+    const errorMessages = body.errors.map((e) => e.message).join("; ");
+    console.error("Shopify GraphQL error", {
+      shop: context?.shop,
+      operation: context?.operation ?? query.slice(0, 80),
+      errors: body.errors,
+    });
+    throw new Error(errorMessages);
   }
   return body;
 }
@@ -312,6 +322,10 @@ export async function syncShopifyData(
     console.info("Shopify product sync attempted", {
       shop: opts.shopDomain,
       grantedScopes: opts.grantedScopes,
+      hasReadProducts: hasScope(opts.grantedScopes, "read_products"),
+      hasWriteProducts: hasScope(opts.grantedScopes, "write_products"),
+      hasReadContent: hasScope(opts.grantedScopes, "read_content"),
+      hasWriteContent: hasScope(opts.grantedScopes, "write_content"),
       maxProducts: 1000,
     });
     products = await fetchProducts(admin, { first: 50, limit: 1000 });
@@ -349,11 +363,14 @@ export async function syncShopifyData(
       result.products = { ok: true, count: products.length };
     }
   } catch (error) {
-    console.warn("Shopify product sync failed", {
+    const friendlyError = friendlyProductSyncError(error);
+    console.error("Shopify product sync failed", {
       shop: opts.shopDomain,
-      error: friendlyProductSyncError(error),
+      grantedScopes: opts.grantedScopes,
+      error: friendlyError,
+      isAccessError: isAccessError(error),
     });
-    result.products = { ok: false, count: 0, error: friendlyProductSyncError(error), skipped: false };
+    result.products = { ok: false, count: 0, error: friendlyError, skipped: false };
   }
 
   let orders: ShopifyOrderNode[] = [];
@@ -404,12 +421,19 @@ export async function syncShopifyData(
       }
     }
   } catch (error) {
+    const accessError = isAccessError(error);
+    console.error("Shopify order sync failed", {
+      shop: opts.shopDomain,
+      grantedScopes: opts.grantedScopes,
+      error: errorMessage(error),
+      isAccessError: accessError,
+    });
     result.orders = {
       ok: false,
       count: 0,
       error: errorMessage(error),
-      skipped: isAccessError(error),
-      reason: isAccessError(error)
+      skipped: accessError,
+      reason: accessError
         ? "Orders could not be synced because Shopify requires re-installing the app after scope changes."
         : undefined,
     };

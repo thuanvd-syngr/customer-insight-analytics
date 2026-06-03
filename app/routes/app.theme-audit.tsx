@@ -13,7 +13,7 @@ import { ensureShop, getLatestRun, parseRun } from "~/lib/shop.server";
 import { EMPTY_INSIGHT, normalizeInsightResult } from "~/lib/types";
 import { authenticate } from "~/shopify.server";
 
-type ActionResult = { scanned?: boolean; issueCount?: number; error?: string };
+type ActionResult = { scanned?: boolean; issueCount?: number; noContent?: boolean; error?: string };
 
 async function context(request: Request) {
   const { session } = await authenticate.admin(request);
@@ -62,13 +62,18 @@ export async function loader({ request }: LoaderFunctionArgs) {
       getLatestRun(prisma, shop.id),
       buildThemeText(shop.id, sampleMode),
     ]);
+    const hasContent = themeText.trim().length > 0 || sampleMode;
+    // Only run scanThemeContent when there is actual content to scan.
+    // An empty themeText would produce all 6 phantom issues (every term absent),
+    // which is misleading when no products have been synced yet.
     const insight = normalizeInsightResult(sampleMode ? buildSampleInsight() : (parseRun(latestRun) ?? EMPTY_INSIGHT));
-    const issues = scanThemeContent({ themeText, insight });
+    const issues = hasContent ? scanThemeContent({ themeText, insight }) : [];
     return json({
-      hasThemeSignal: themeText.trim().length > 0 || sampleMode,
+      hasThemeSignal: hasContent,
       isSampleMode: sampleMode,
       issues,
       scannedCharacters: themeText.length,
+      requiresScan: !hasContent,
       loadError: null,
     });
   } catch (error) {
@@ -79,6 +84,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       isSampleMode: false,
       issues: [],
       scannedCharacters: 0,
+      requiresScan: true,
       loadError: "Theme audit data is loading. Your store data is safe; refresh and scan again.",
     });
   }
@@ -92,6 +98,10 @@ export async function action({ request }: ActionFunctionArgs) {
       getLatestRun(prisma, shop.id),
       buildThemeText(shop.id, sampleMode),
     ]);
+    const hasContent = themeText.trim().length > 0 || sampleMode;
+    if (!hasContent) {
+      return json<ActionResult>({ scanned: true, issueCount: 0, noContent: true });
+    }
     const insight = normalizeInsightResult(sampleMode ? buildSampleInsight() : (parseRun(latestRun) ?? EMPTY_INSIGHT));
     const issues = scanThemeContent({ themeText, insight });
     return json<ActionResult>({ scanned: true, issueCount: issues.length });
@@ -109,13 +119,17 @@ function toneFor(severity: string): "critical" | "warning" | "info" {
 }
 
 export default function ThemeAudit() {
-  const { hasThemeSignal, isSampleMode, issues, scannedCharacters, loadError } = useLoaderData<typeof loader>();
+  const { hasThemeSignal, isSampleMode, issues, scannedCharacters, requiresScan, loadError } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
   if (navigation.state === "loading") return <ListSkeleton />;
   const scanActionKey = makeActionKey("theme:scan");
   const busy = navigation.state !== "idle" && formActionKey(navigation.formData) === scanActionKey;
-  const visibleIssues = issues.filter((issue) => issue != null);
+  // Only show issues when there is real content scanned or a scan just ran.
+  // Suppresses phantom issues that appear when no products are synced.
+  const scanHasRun = actionData?.scanned && !actionData.noContent;
+  const issuesReady = (scannedCharacters > 0 || isSampleMode) && !requiresScan;
+  const visibleIssues = (issuesReady || scanHasRun) ? issues.filter((issue) => issue != null) : [];
 
   return (
     <AppPage
@@ -137,9 +151,19 @@ export default function ThemeAudit() {
         ) : null}
         {loadError ? <Banner tone="info" title="Theme audit loading"><p>{loadError}</p></Banner> : null}
         {actionData?.error ? <Banner tone="critical" title="Scan failed"><p>{actionData.error}</p></Banner> : null}
-        {actionData?.scanned ? (
+        {actionData?.scanned && !actionData.noContent ? (
           <Banner tone="success" title="Theme scan complete">
             <p>{`${formatNumber(actionData.issueCount ?? 0)} issues found in the latest scan.`}</p>
+          </Banner>
+        ) : null}
+        {actionData?.scanned && actionData.noContent ? (
+          <Banner tone="info" title="No content to scan yet">
+            <p>Sync products or publish recovery content first, then scan again to find theme coverage gaps.</p>
+          </Banner>
+        ) : null}
+        {requiresScan && !actionData?.scanned ? (
+          <Banner tone="info" title="Sync products before scanning">
+            <p>The scanner needs Shopify product text or published recovery assets. Import your store data, then click Scan to find content gaps.</p>
           </Banner>
         ) : null}
 

@@ -6,6 +6,7 @@ import { Banner, BlockStack } from "@shopify/polaris";
 import polarisStyles from "@shopify/polaris/build/esm/styles.css?url";
 import { AppProvider } from "@shopify/shopify-app-remix/react";
 import { boundary } from "@shopify/shopify-app-remix/server";
+import { useEffect, useState } from "react";
 
 import appStyles from "~/styles/app.css?url";
 import { AppShell } from "~/components";
@@ -18,15 +19,20 @@ export const links: LinksFunction = () => [
 
 export async function loader({ request }: LoaderFunctionArgs) {
   await authenticate.admin(request);
-  const url = new URL(request.url);
-  return json({
-    apiKey: process.env.SHOPIFY_API_KEY || "",
-    hasEmbeddedHost: Boolean(url.searchParams.get("host")),
-  });
+  return json({ apiKey: process.env.SHOPIFY_API_KEY || "" });
 }
 
 export default function EmbeddedApp() {
-  const { apiKey, hasEmbeddedHost } = useLoaderData<typeof loader>();
+  const { apiKey } = useLoaderData<typeof loader>();
+  // Detect client-side whether the app is running outside an iframe (i.e. not
+  // inside Shopify Admin). The host param is only present on the initial load
+  // and disappears on Remix client-side navigations — so it cannot be used as
+  // a reliable embedded-vs-standalone signal after the first render.
+  const [isOutsideAdmin, setIsOutsideAdmin] = useState(false);
+  useEffect(() => {
+    setIsOutsideAdmin(window.self === window.top);
+  }, []);
+
   return (
     <AppProvider isEmbeddedApp apiKey={apiKey}>
       <NavMenu>
@@ -42,7 +48,7 @@ export default function EmbeddedApp() {
       </NavMenu>
       <AppShell>
         <BlockStack gap="400">
-          {!hasEmbeddedHost ? (
+          {isOutsideAdmin ? (
             <Banner tone="info" title="Embedded navigation fallback active">
               <p>If this page was refreshed outside Shopify Admin, open the app from Shopify Admin to restore embedded navigation context.</p>
             </Banner>

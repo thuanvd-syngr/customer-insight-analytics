@@ -182,11 +182,19 @@ async function createRecoveryDrafts(input: {
 export async function loader({ request }: LoaderFunctionArgs) {
   try {
     const { shop } = await loadContext(request);
-    const sampleMode = await isReviewerMode(prisma, shop.id);
     const faqModel = generatedFaqDelegate();
     const appSetting = getDelegate(prisma, "appSetting");
-    const [latestRun, publishedCounts, generatedFaqs, draftSetting] = await Promise.all([
+    // Fetch gating data first so sampleMode can be derived before the rest.
+    // sampleMode mirrors the dashboard guard: only activate when there is truly
+    // no data, matching the behaviour in app._index.tsx.
+    const [latestRun, existingMessageCount] = await Promise.all([
       getLatestRun(prisma, shop.id),
+      prisma.importedMessage.count({ where: { shopId: shop.id } }),
+    ]);
+    const sampleMode = !latestRun && existingMessageCount === 0
+      ? await isReviewerMode(prisma, shop.id)
+      : false;
+    const [publishedCounts, generatedFaqs, draftSetting] = await Promise.all([
       sampleMode ? Promise.resolve({ total: 5, pages: 3, blogs: 1, productFaqs: 1 }) : getPublishedCounts(prisma, shop.id),
       sampleMode
         ? Promise.resolve([
