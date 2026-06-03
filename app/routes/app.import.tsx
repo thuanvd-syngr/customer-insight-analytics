@@ -393,13 +393,13 @@ export default function ImportPage() {
     <AppPage
       title="Revenue Recovery Onboarding"
       subtitle="Move from customer conversations to revenue recovery content in four steps."
-      primaryAction={
+      primaryAction={recentMessageCount > 0 ? (
         <Form method="post">
           <input type="hidden" name="intent" value="analyze" />
           <input type="hidden" name="actionKey" value={makeActionKey("run:analysis")} />
           <Button variant="primary" submit loading={loadingFor(makeActionKey("run:analysis"))} disabled={loadingFor(makeActionKey("run:analysis"))} onClick={() => markPending(makeActionKey("run:analysis"))}>Run analysis</Button>
         </Form>
-      }
+      ) : <Button url="/app/import#customer-messages" variant="primary">Add customer questions</Button>}
     >
       <BlockStack gap="500">
         {loadError ? (
@@ -663,7 +663,20 @@ export default function ImportPage() {
               <SectionHeader title="Step 2: Analyze customer questions" description="Identify lost sales, affected products, and recovery actions." />
               <input type="hidden" name="intent" value="analyze" />
               <input type="hidden" name="actionKey" value={makeActionKey("run:analysis")} />
-              <Button variant="primary" submit loading={loadingFor(makeActionKey("run:analysis"))} disabled={loadingFor(makeActionKey("run:analysis"))} onClick={() => markPending(makeActionKey("run:analysis"))}>Run analysis</Button>
+              <Button
+                variant="primary"
+                submit
+                loading={loadingFor(makeActionKey("run:analysis"))}
+                disabled={recentMessageCount === 0 || loadingFor(makeActionKey("run:analysis"))}
+                onClick={() => markPending(makeActionKey("run:analysis"))}
+              >
+                Run analysis
+              </Button>
+              {recentMessageCount === 0 ? (
+                <Text as="p" variant="bodySm" tone="subdued">
+                  Add chats, emails, support messages, or order notes before running analysis.
+                </Text>
+              ) : null}
             </BlockStack>
           </Form>
         </Card>

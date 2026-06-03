@@ -107,22 +107,23 @@ export async function loader({ request }: LoaderFunctionArgs) {
         ? bulkJob.findMany({ where: { shopId: shop.id, jobType: "publish_pages" }, orderBy: { createdAt: "desc" }, take: 3 })
         : [],
     ]);
-    const insight = parseRun(latestRun) ?? EMPTY_INSIGHT;
-    const pagePreview = ALL_PAGE_CONTENT_TYPES.map((contentType) => ({
+    const hasInsight = (latestRun?.messageCount ?? 0) > 0;
+    const insight = hasInsight ? (parseRun(latestRun) ?? EMPTY_INSIGHT) : EMPTY_INSIGHT;
+    const pagePreview = hasInsight ? ALL_PAGE_CONTENT_TYPES.map((contentType) => ({
       contentType,
       label: PAGE_TYPE_LABELS[contentType],
       faqCount: buildFaqsForType(contentType, insight).length,
-    }));
-    const blogPreview = BLOG_GROUPS.slice(0, 4).map((groupId) => ({
+    })) : [];
+    const blogPreview = hasInsight ? BLOG_GROUPS.slice(0, 4).map((groupId) => ({
       groupId,
       label: BLOG_GROUP_LABELS[groupId] ?? groupId,
       faqCount: buildFaqsForGroup(groupId, insight).length,
-    }));
+    })) : [];
     const productFaqPreview = (generatedFaqs as Array<{ id: string; productId?: string | null; question: string; status: string }>).filter((faq) => faq.productId);
     const missingContentScopes = missingScopes(session.scope, CONTENT_PUBLISH_SCOPES);
     const missingProductFaqScopes = missingScopes(session.scope, PRODUCT_FAQ_PUBLISH_SCOPES);
     return json({
-      hasInsight: Boolean(latestRun),
+      hasInsight,
       published,
       counts,
       pagePreview,
@@ -189,6 +190,14 @@ export async function action({ request }: ActionFunctionArgs) {
     return json({
       error: `Missing Shopify scope${contentScopeMissing.length === 1 ? "" : "s"}: ${contentScopeMissing.join(", ")}. Update app scopes, redeploy, then reinstall or reauthorize the app.`,
     }, { status: 403 });
+  }
+  if (requiresContentPublish) {
+    const latestRun = await getLatestRun(prisma, shop.id);
+    if ((latestRun?.messageCount ?? 0) === 0) {
+      return json({
+        error: "Import customer questions and run analysis before publishing recovery content.",
+      }, { status: 400 });
+    }
   }
 
   // Rate-limit check shared by all publish intents (safe: table may not exist yet)
@@ -412,13 +421,13 @@ export default function PublishHub() {
 
   const activePublished = published.filter((p): p is NonNullable<typeof p> => p != null && p.status === "published");
   const failedPublished = published.filter((p): p is NonNullable<typeof p> => p != null && p.status === "failed");
-  const contentPublishDisabled = diagnostics.scopes.missingContent.length > 0;
+  const contentPublishDisabled = diagnostics.scopes.missingContent.length > 0 || !hasInsight;
 
   return (
     <AppPage
       title="Publish Recovery Content"
       subtitle="One click to publish FAQ pages, policy pages, and blog articles directly to your Shopify store."
-      primaryAction={<Button url="/app/faq" variant="primary">Generate Content First</Button>}
+      primaryAction={<Button url={hasInsight ? "/app/faq" : "/app/import"} variant="primary">{hasInsight ? "Generate Content First" : "Import Customer Questions"}</Button>}
       secondaryAction={<Button url="/app">Back to Dashboard</Button>}
     >
       <BlockStack gap="600">
@@ -439,10 +448,9 @@ export default function PublishHub() {
           <Banner tone="info" title="Run analysis first for personalized content">
             <p>
               The publish engine generates page content from your actual customer questions.
-              Run analysis to get personalized FAQs based on real buying friction data.
-              Default FAQ content is used until analysis is available.
+              Import customer questions and run analysis before publishing recovery content.
             </p>
-            <Button url="/app/import" variant="primary">Run Analysis</Button>
+            <Button url="/app/import" variant="primary">Import Customer Questions</Button>
           </Banner>
         ) : null}
 
@@ -465,6 +473,7 @@ export default function PublishHub() {
           </div>
         </div>
 
+        {hasInsight ? (
         <Card>
           <BlockStack gap="300">
             <InlineStack align="space-between" blockAlign="start" wrap={false}>
@@ -522,6 +531,7 @@ export default function PublishHub() {
             ) : null}
           </BlockStack>
         </Card>
+        ) : null}
 
         <Card>
           <BlockStack gap="200">
@@ -572,6 +582,7 @@ export default function PublishHub() {
           </BlockStack>
         </Card>
 
+        {hasInsight ? (
         <BlockStack gap="300">
           <SectionHeader
             title="Publish Shopify Pages"
@@ -611,7 +622,9 @@ export default function PublishHub() {
             })}
           </InlineGrid>
         </BlockStack>
+        ) : null}
 
+        {hasInsight ? (
         <BlockStack gap="300">
           <SectionHeader
             title="Publish Blog Articles"
@@ -648,6 +661,7 @@ export default function PublishHub() {
             })}
           </InlineGrid>
         </BlockStack>
+        ) : null}
 
         {failedPublished.length > 0 ? (
           <Card>
@@ -759,7 +773,9 @@ export default function PublishHub() {
             <BlockStack gap="200">
               <Text as="h3" variant="headingMd">No content published yet</Text>
               <Text as="p" variant="bodyMd" tone="subdued">
-                Choose a content type above and click Publish. Content is added to your Shopify store immediately.
+                {hasInsight
+                  ? "Choose a content type above and click Publish. Content is added to your Shopify store immediately."
+                  : "Import customer questions and run analysis before publishing recovery content."}
               </Text>
             </BlockStack>
           </Card>

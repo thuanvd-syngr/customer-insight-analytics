@@ -339,7 +339,7 @@ export default function RecoveryAutomation() {
     <AppPage
       title="Revenue Automation Engine"
       subtitle="One prioritized recovery plan, draft generation, content packs, and estimated recovery tracking."
-      primaryAction={
+      primaryAction={hasRun ? (
         <Form method="post">
           <input type="hidden" name="intent" value="generate-plan" />
           <input type="hidden" name="actionKey" value={makeActionKey("generate:recovery-plan")} />
@@ -353,7 +353,7 @@ export default function RecoveryAutomation() {
             Generate Recovery Plan
           </Button>
         </Form>
-      }
+      ) : <Button url="/app/import" variant="primary">Import Customer Questions</Button>}
       secondaryAction={<Button url="/app/publish">Publish Recovery Content</Button>}
     >
       <BlockStack gap="600">
@@ -383,17 +383,19 @@ export default function RecoveryAutomation() {
         {!hasRun ? (
           <Card>
             <EmptyInsight
-              heading="Run analysis to build a recovery plan"
-              primaryActionLabel="Import store data"
+              heading="Import customer questions to build a recovery plan"
+              primaryActionLabel="Import customer questions"
               primaryActionUrl="/app/import"
               secondaryActionLabel="Open theme audit"
               secondaryActionUrl="/app/theme-audit"
             >
-              <p>Recovery automation needs customer questions or synced Shopify data to estimate revenue at risk.</p>
+              <p>Recovery automation needs imported chats, emails, support messages, or order notes before it can estimate revenue at risk.</p>
             </EmptyInsight>
           </Card>
         ) : null}
 
+        {hasRun ? (
+          <>
         <InlineGrid columns={{ xs: 1, md: 4 }} gap="400">
           <Card>
             <BlockStack gap="100">
@@ -566,6 +568,8 @@ export default function RecoveryAutomation() {
           <Banner tone="info" title={`You have ${money(insight.revenueOpportunity.monthlyAtRisk)}/mo revenue at risk.`}>
             <p>Publishing high-impact recovery content helps address buying objections. Results vary by store, traffic, and product category.</p>
           </Banner>
+        ) : null}
+          </>
         ) : null}
       </BlockStack>
     </AppPage>

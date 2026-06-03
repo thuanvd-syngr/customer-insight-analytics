@@ -19,6 +19,7 @@ import { safeCount } from "~/lib/prisma-safe";
 import { ensureShop, getLatestRun, parseRun } from "~/lib/shop.server";
 import { EMPTY_INSIGHT } from "~/lib/types";
 import { authenticate } from "~/shopify.server";
+import { ANALYSIS_EXCLUDED_MESSAGE_SOURCES } from "~/lib/utils";
 
 type SyncedProductRow = {
   id: string;
@@ -56,8 +57,10 @@ export async function loader({ request }: LoaderFunctionArgs) {
       getLatestRun(prisma, shop.id),
       safeCount(prisma, "shopifyProduct", { where: { shopId: shop.id } }),
       safeCount(prisma, "productFinding", { where: { shopId: shop.id } }),
-      safeCount(prisma, "insightRun", { where: { shopId: shop.id, status: "completed" } }),
-      safeCount(prisma, "importedMessage", { where: { shopId: shop.id } }),
+      safeCount(prisma, "insightRun", { where: { shopId: shop.id, status: "completed", messageCount: { gt: 0 } } }),
+      safeCount(prisma, "importedMessage", {
+        where: { shopId: shop.id, source: { notIn: [...ANALYSIS_EXCLUDED_MESSAGE_SOURCES] } },
+      }),
       safeCount(prisma, "keywordFinding", { where: { shopId: shop.id } }),
       prisma.shopifyProduct.findMany({
         where: { shopId: shop.id },
@@ -76,7 +79,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
         },
       }),
     ]);
-    const insight = parseRun(latestRun) ?? EMPTY_INSIGHT;
+    const hasAnalyzedQuestions = (latestRun?.messageCount ?? 0) > 0;
+    const insight = hasAnalyzedQuestions ? (parseRun(latestRun) ?? EMPTY_INSIGHT) : EMPTY_INSIGHT;
     const syncedProductRows: SyncedProductRow[] = syncedProducts.map((product) => ({
       id: product.id,
       externalId: product.externalId,
@@ -337,7 +341,9 @@ export default function Products() {
                       const gap = gapByProduct.get(product.externalId) ?? gapByProductTitle.get(product.title.toLowerCase());
                       const detailUrl = gap
                         ? productRecoveryPath(product.externalId)
-                        : "/app/import";
+                        : importedMessageCount > 0
+                          ? "/app/import"
+                          : "/app/import#customer-messages";
                       return (
                         <tr key={product.id}>
                           <td style={{ padding: "12px 8px", borderBottom: "1px solid #eef0f2", minWidth: 220 }}>
@@ -368,7 +374,7 @@ export default function Products() {
                             </Badge>
                           </td>
                           <td style={{ padding: "12px 8px", borderBottom: "1px solid #eef0f2" }}>
-                            <Button url={detailUrl}>{gap ? "Open" : "Run analysis"}</Button>
+                            <Button url={detailUrl}>{gap ? "Open" : importedMessageCount > 0 ? "Analyze questions" : "Add questions"}</Button>
                           </td>
                         </tr>
                       );
@@ -383,9 +389,9 @@ export default function Products() {
         {pageState === "needs_analysis" ? (
           <EmptyStateCard
             title="Products synced successfully"
-            body="Run analysis to generate storewide insights. Product-specific gaps appear after customer questions are linked to products."
-            actionLabel="Run analysis"
-            actionUrl="/app/import"
+            body="Add customer questions, then run analysis to generate storewide insights. Product-specific gaps appear after questions are linked to products."
+            actionLabel={importedMessageCount > 0 ? "Run analysis" : "Add customer questions"}
+            actionUrl={importedMessageCount > 0 ? "/app/import" : "/app/import#customer-messages"}
           />
         ) : pageState === "no_findings" ? (
           <EmptyStateCard
