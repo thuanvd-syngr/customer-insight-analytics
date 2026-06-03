@@ -1,5 +1,7 @@
 # Shopify App Store Review Checklist — Customer Insight Analytics
 
+> Detailed reviewer instructions (scope justifications, test walkthrough, data privacy, billing) are in [REVIEWER_INSTRUCTIONS.md](./REVIEWER_INSTRUCTIONS.md).
+
 ## 1. Protected Customer Data (REQUIRED before final deploy)
 
 The production config (`shopify.app.production.toml`) has GDPR compliance webhook
