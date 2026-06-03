@@ -225,8 +225,9 @@ export async function action({ request }: ActionFunctionArgs) {
     const scopeCheck = checkScopesForAction(session, REQUIRED_SYNC_SCOPES);
     if (!scopeCheck.ok) {
       const missing = scopeCheck.missing.join(", ");
+      const reauthorizeUrl = `/auth/reauthorize?shop=${encodeURIComponent(session.shop)}`;
       return json({
-        error: `Sync requires reinstalling the app — missing scopes: ${missing}. Uninstall the app from Shopify Admin, then reinstall to reauthorize with the required scopes.`,
+        error: `Sync requires reauthorization — missing scopes: ${missing}. Visit ${reauthorizeUrl} to clear the stale session and reauthorize, or uninstall and reinstall the app from Shopify Admin.`,
       });
     }
     const sync = await syncShopifyData(prisma, shop.id, admin, {

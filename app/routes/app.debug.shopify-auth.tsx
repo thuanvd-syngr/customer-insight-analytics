@@ -73,17 +73,28 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
     instructions: missingRequired.length > 0
       ? `Session is stale. Missing: ${missingRequired.join(", ")}. ` +
-        `Uninstall the app from Shopify Admin → Apps → Customer Insight Analytics → Uninstall, ` +
-        `then reinstall to trigger a fresh OAuth grant.`
+        `Click the reauthorize link below to clear the stale session and trigger a fresh OAuth grant.`
       : "Session scopes look correct.",
+    reauthorizeUrl: missingRequired.length > 0
+      ? `/auth/reauthorize?shop=${encodeURIComponent(session.shop)}`
+      : null,
   });
 }
 
 export default function ShopifyAuthDebug() {
   const data = useLoaderData<typeof loader>();
   return (
-    <pre style={{ padding: 24, whiteSpace: "pre-wrap", fontFamily: "monospace", fontSize: 13, lineHeight: 1.5 }}>
-      {JSON.stringify(data, null, 2)}
-    </pre>
+    <div style={{ padding: 24, fontFamily: "monospace", fontSize: 13, lineHeight: 1.5 }}>
+      {data.reauthorizeUrl && (
+        <div style={{ marginBottom: 16, padding: 12, background: "#fff3cd", border: "1px solid #ffc107", borderRadius: 4 }}>
+          <strong>Session is stale — scopes missing.</strong>{" "}
+          <a href={data.reauthorizeUrl} style={{ color: "#0070f3" }}>
+            Click here to clear the stale session and reauthorize
+          </a>{" "}
+          (clears all Session rows for this shop, then starts a fresh OAuth grant).
+        </div>
+      )}
+      <pre style={{ whiteSpace: "pre-wrap" }}>{JSON.stringify(data, null, 2)}</pre>
+    </div>
   );
 }

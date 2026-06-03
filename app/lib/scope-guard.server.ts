@@ -53,7 +53,11 @@ export function requireScopesOrRedirect(
     reauth: true,
   });
 
-  throw redirect(`/auth?shop=${session.shop}`);
+  // Redirect to /auth/reauthorize rather than /auth directly. The reauthorize
+  // route deletes all Session rows for the shop before redirecting to /auth,
+  // which forces authenticate.admin() to start a fresh OAuth grant instead of
+  // returning the cached stale offline session from PrismaSessionStorage.
+  throw redirect(`/auth/reauthorize?shop=${encodeURIComponent(session.shop)}`);
 }
 
 /**

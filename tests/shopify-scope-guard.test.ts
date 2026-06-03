@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   getMissingFromRequired,
   checkScopesForAction,
+  requireScopesOrRedirect,
   REQUIRED_APP_SCOPES,
   REQUIRED_SYNC_SCOPES,
 } from "~/lib/scope-guard.server";
@@ -43,6 +44,49 @@ describe("getMissingFromRequired", () => {
   it("order of scopes in the granted string does not matter", () => {
     const reversed = "write_content,read_content,read_orders,write_products,read_products";
     expect(getMissingFromRequired(reversed, REQUIRED_APP_SCOPES)).toEqual([]);
+  });
+});
+
+describe("requireScopesOrRedirect", () => {
+  it("throws a redirect to /auth/reauthorize when scopes are missing", () => {
+    let thrown: unknown;
+    try {
+      requireScopesOrRedirect({ ...SESSION, scope: STALE_SCOPE });
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(Response);
+    const location = (thrown as Response).headers.get("Location");
+    expect(location).toMatch(/^\/auth\/reauthorize\?shop=/);
+    expect(location).toContain("test.myshopify.com");
+  });
+
+  it("includes the shop domain in the reauthorize redirect URL", () => {
+    let thrown: unknown;
+    try {
+      requireScopesOrRedirect({ shop: "my-store.myshopify.com", id: "sess_xyz", scope: STALE_SCOPE });
+    } catch (e) {
+      thrown = e;
+    }
+    const location = (thrown as Response).headers.get("Location");
+    expect(location).toContain("my-store.myshopify.com");
+  });
+
+  it("does not throw when all required scopes are present", () => {
+    expect(() => {
+      requireScopesOrRedirect({ ...SESSION, scope: FULL_SCOPE });
+    }).not.toThrow();
+  });
+
+  it("throws when only one scope is missing — not just when all are missing", () => {
+    const oneScoped = "read_products,write_products,read_orders,write_content"; // missing read_content
+    let thrown: unknown;
+    try {
+      requireScopesOrRedirect({ ...SESSION, scope: oneScoped });
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(Response);
   });
 });
 
