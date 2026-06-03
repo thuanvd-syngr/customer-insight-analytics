@@ -422,12 +422,20 @@ export default function ImportPage() {
               <Text as="p" variant="bodyMd" tone="subdued">
                 Customers skipped: {actionData.sync.customers.reason ?? CUSTOMER_APPROVAL_COPY}
               </Text>
-              {actionData.sync.products.error || actionData.sync.orders.error ? (
+              {actionData.sync.products.error ? (
                 <Text as="p" variant="bodySm" tone="critical">
-                  {actionData.sync.products.error
-                    ? `Products sync failed: ${actionData.sync.products.error}`
-                    : "Order access is unavailable. Product analysis will continue."}
+                  Products sync failed: {actionData.sync.products.error}
                 </Text>
+              ) : null}
+              {actionData.sync.orders.error ? (
+                <Text as="p" variant="bodySm" tone="critical">
+                  Orders sync failed: {actionData.sync.orders.error}
+                </Text>
+              ) : null}
+              {isDevMode && (actionData.sync.products.error || actionData.sync.orders.error) ? (
+                <pre style={{ fontSize: 11, background: "#f5f5f5", padding: 8, borderRadius: 4, overflowX: "auto", whiteSpace: "pre-wrap" }}>
+                  {JSON.stringify({ products: actionData.sync.products, orders: actionData.sync.orders }, null, 2)}
+                </pre>
               ) : null}
             </BlockStack>
           </Card>

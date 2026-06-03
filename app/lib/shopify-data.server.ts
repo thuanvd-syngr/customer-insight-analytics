@@ -17,19 +17,29 @@ async function graph<T>(
   variables: Record<string, unknown>,
   context?: { shop?: string; operation?: string },
 ): Promise<T> {
+  const operationName =
+    context?.operation ??
+    (query.trim().match(/^(?:query|mutation)\s+(\w+)/)?.[1] ?? query.slice(0, 60));
   const res = await admin.graphql(query, { variables });
+  const httpStatus = res.status;
   const body = (await res.json()) as T & {
+    data?: unknown;
     errors?: Array<{ message: string; extensions?: { code?: string } }>;
     extensions?: { cost?: unknown };
   };
   if (body.errors?.length) {
-    const errorMessages = body.errors.map((e) => e.message).join("; ");
-    console.error("Shopify GraphQL error", {
+    console.error("[shopify-data] GraphQL top-level errors", {
       shop: context?.shop,
-      operation: context?.operation ?? query.slice(0, 80),
+      operationName,
+      httpStatus,
+      variables,
       errors: body.errors,
+      data: body.data ?? null,
     });
-    throw new Error(errorMessages);
+    const errorMessages = body.errors
+      .map((e) => (e.extensions?.code ? `${e.message} [${e.extensions.code}]` : e.message))
+      .join("; ");
+    throw new Error(`[${operationName}] ${errorMessages}`);
   }
   return body;
 }
@@ -63,7 +73,8 @@ type ShopifyProductWriteData = {
 };
 
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : "Shopify sync failed.";
+  if (error instanceof Error) return error.message;
+  try { return JSON.stringify(error); } catch { return String(error); }
 }
 
 function isAccessError(error: unknown): boolean {
@@ -93,11 +104,12 @@ async function fetchConnection<TNode, TBody>(
   variables: Record<string, unknown>,
   read: (body: TBody) => { nodes?: TNode[]; pageInfo?: PageInfo } | undefined,
   limit = 1000,
+  context?: { shop?: string; operation?: string },
 ): Promise<TNode[]> {
   const nodes: TNode[] = [];
   let cursor: string | null = null;
   do {
-    const body = await graph<TBody>(admin, query, { ...variables, after: cursor });
+    const body = await graph<TBody>(admin, query, { ...variables, after: cursor }, context);
     const connection = read(body);
     nodes.push(...(connection?.nodes ?? []));
     const pageInfo = connection?.pageInfo;
@@ -108,7 +120,7 @@ async function fetchConnection<TNode, TBody>(
 
 export async function fetchOrders(
   admin: AdminLike,
-  opts: { first?: number } = {},
+  opts: { first?: number; context?: { shop?: string } } = {},
 ): Promise<NormalizedMessage[]> {
   const body = await graph<{
     data?: { orders?: { nodes?: ShopifyOrderNode[] } };
@@ -120,6 +132,7 @@ export async function fetchOrders(
       }
     }`,
     { first: opts.first ?? 50 },
+    { operation: "Orders", shop: opts.context?.shop },
   );
 
   return (body.data?.orders?.nodes ?? []).flatMap((order) => {
@@ -141,7 +154,7 @@ export async function fetchOrders(
 
 export async function fetchProducts(
   admin: AdminLike,
-  opts: { first?: number; limit?: number } = {},
+  opts: { first?: number; limit?: number; context?: { shop?: string } } = {},
 ): Promise<ProductInput[]> {
   const products = await fetchConnection<
     ShopifyProductNode,
@@ -173,6 +186,7 @@ export async function fetchProducts(
     { first: opts.first ?? 50 },
     (body) => body.data?.products,
     opts.limit ?? opts.first ?? 1000,
+    { operation: "Products", shop: opts.context?.shop },
   );
 
   return products.map((product) => ({
@@ -217,7 +231,7 @@ interface ShopifyOrderNode {
 
 export async function fetchOrderSnapshots(
   admin: AdminLike,
-  opts: { first?: number; limit?: number } = {},
+  opts: { first?: number; limit?: number; context?: { shop?: string } } = {},
 ): Promise<ShopifyOrderNode[]> {
   return fetchConnection<ShopifyOrderNode, { data?: { orders?: { nodes?: ShopifyOrderNode[]; pageInfo?: PageInfo } } }>(
     admin,
@@ -230,6 +244,7 @@ export async function fetchOrderSnapshots(
     { first: opts.first ?? 50 },
     (body) => body.data?.orders,
     opts.limit ?? opts.first ?? 1000,
+    { operation: "Orders", shop: opts.context?.shop },
   );
 }
 
@@ -328,7 +343,7 @@ export async function syncShopifyData(
       hasWriteContent: hasScope(opts.grantedScopes, "write_content"),
       maxProducts: 1000,
     });
-    products = await fetchProducts(admin, { first: 50, limit: 1000 });
+    products = await fetchProducts(admin, { first: 50, limit: 1000, context: { shop: opts.shopDomain } });
     console.info("Shopify product sync returned", {
       shop: opts.shopDomain,
       count: products.length,
@@ -363,14 +378,15 @@ export async function syncShopifyData(
       result.products = { ok: true, count: products.length };
     }
   } catch (error) {
-    const friendlyError = friendlyProductSyncError(error);
+    const msg = friendlyProductSyncError(error);
     console.error("Shopify product sync failed", {
       shop: opts.shopDomain,
       grantedScopes: opts.grantedScopes,
-      error: friendlyError,
+      error: msg,
+      stack: error instanceof Error ? error.stack : undefined,
       isAccessError: isAccessError(error),
     });
-    result.products = { ok: false, count: 0, error: friendlyError, skipped: false };
+    result.products = { ok: false, count: 0, error: msg, skipped: false };
   }
 
   let orders: ShopifyOrderNode[] = [];
@@ -383,7 +399,7 @@ export async function syncShopifyData(
         reason: "Orders could not be synced because Shopify requires re-installing the app after scope changes.",
       };
     } else {
-      orders = await fetchOrderSnapshots(admin, { first: 100, limit: 1000 });
+      orders = await fetchOrderSnapshots(admin, { first: 100, limit: 1000, context: { shop: opts.shopDomain } });
       if (!shopifyOrder?.upsert) {
         result.orders = { ok: false, count: 0, skipped: true, reason: "Order storage unavailable" };
       } else {
@@ -422,16 +438,18 @@ export async function syncShopifyData(
     }
   } catch (error) {
     const accessError = isAccessError(error);
+    const msg = errorMessage(error);
     console.error("Shopify order sync failed", {
       shop: opts.shopDomain,
       grantedScopes: opts.grantedScopes,
-      error: errorMessage(error),
+      error: msg,
+      stack: error instanceof Error ? error.stack : undefined,
       isAccessError: accessError,
     });
     result.orders = {
       ok: false,
       count: 0,
-      error: errorMessage(error),
+      error: msg,
       skipped: accessError,
       reason: accessError
         ? "Orders could not be synced because Shopify requires re-installing the app after scope changes."

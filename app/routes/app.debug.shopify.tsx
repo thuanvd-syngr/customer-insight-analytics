@@ -27,42 +27,39 @@ export async function loader({ request }: LoaderFunctionArgs) {
       })
     : null;
 
-  // Probe GraphQL with a minimal product query to surface API/scope errors
-  let apiProbe: {
-    ok: boolean;
-    productCount?: number;
-    apiVersion?: string;
-    error?: string;
-    userErrors?: unknown[];
-    query?: string;
-  };
-  const PROBE_QUERY = `query DiagProducts { products(first: 1) { nodes { id title } } shop { myshopifyDomain plan { displayName } } }`;
+  // Probe products: surfaces API auth errors and field availability
+  type ProbeResult<T> = { ok: boolean; data?: T; errors?: unknown[]; httpStatus?: number; error?: string };
+  let productsProbe: ProbeResult<Array<{ id: string; title: string; handle: string | null }>>;
+  const PROBE_PRODUCTS = `query DiagProducts { products(first: 1) { nodes { id title handle } } }`;
   try {
-    const res = await admin.graphql(PROBE_QUERY);
+    const res = await admin.graphql(PROBE_PRODUCTS);
+    const httpStatus = res.status;
     const body = (await res.json()) as {
-      data?: { products?: { nodes?: Array<{ id: string }> }; shop?: { myshopifyDomain?: string; plan?: { displayName?: string } } };
+      data?: { products?: { nodes?: Array<{ id: string; title: string; handle: string | null }> } };
       errors?: Array<{ message: string }>;
-      extensions?: { cost?: unknown };
     };
-    if (body.errors?.length) {
-      apiProbe = {
-        ok: false,
-        error: body.errors.map((e) => e.message).join("; "),
-        query: PROBE_QUERY,
-        userErrors: body.errors,
-      };
-    } else {
-      apiProbe = {
-        ok: true,
-        productCount: body.data?.products?.nodes?.length ?? 0,
-      };
-    }
+    productsProbe = body.errors?.length
+      ? { ok: false, errors: body.errors, httpStatus, error: body.errors.map((e) => e.message).join("; ") }
+      : { ok: true, data: body.data?.products?.nodes ?? [], httpStatus };
   } catch (error) {
-    apiProbe = {
-      ok: false,
-      error: error instanceof Error ? error.message : String(error),
-      query: PROBE_QUERY,
+    productsProbe = { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+
+  // Probe orders: surfaces read_orders scope errors separately from product errors
+  let ordersProbe: ProbeResult<Array<{ id: string; name: string | null; createdAt: string }>>;
+  const PROBE_ORDERS = `query DiagOrders { orders(first: 1) { nodes { id name createdAt } } }`;
+  try {
+    const res = await admin.graphql(PROBE_ORDERS);
+    const httpStatus = res.status;
+    const body = (await res.json()) as {
+      data?: { orders?: { nodes?: Array<{ id: string; name: string | null; createdAt: string }> } };
+      errors?: Array<{ message: string }>;
     };
+    ordersProbe = body.errors?.length
+      ? { ok: false, errors: body.errors, httpStatus, error: body.errors.map((e) => e.message).join("; ") }
+      : { ok: true, data: body.data?.orders?.nodes ?? [], httpStatus };
+  } catch (error) {
+    ordersProbe = { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
 
   const grantedScopes = session.scope ?? "";
@@ -87,8 +84,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
     lastRunProductCount: latestRun?.productCount ?? null,
     lastRunInsightScore: latestRun?.insightScore ?? null,
 
-    // Shopify API probe
-    apiProbe,
+    // Shopify API probes — separate so products and orders errors are visible independently
+    probes: { products: productsProbe, orders: ordersProbe },
 
     // Most recent bulk publish job
     lastBulkJob: recentJob
