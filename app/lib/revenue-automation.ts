@@ -227,7 +227,7 @@ export function scanThemeContent(input: {
   insight: InsightResult;
 }): ThemeAuditIssue[] {
   const text = input.themeText.toLowerCase();
-  const atRisk = input.insight.revenueOpportunity.monthlyAtRisk || input.insight.revenueOpportunity.estimatedHigh || 1000;
+  const atRisk = input.insight.revenueOpportunity.monthlyAtRisk || input.insight.revenueOpportunity.estimatedHigh || 0;
   const checks: Array<{ id: string; terms: RegExp; issue: string; fix: string; groupId?: KeywordGroupId; weight: number }> = [
     { id: "faq", terms: /faq|frequently asked|question/i, issue: "Missing FAQ section", fix: "Publish an FAQ page and add the FAQ widget to product pages.", groupId: "shipping", weight: 0.22 },
     { id: "shipping", terms: /shipping|delivery|track/i, issue: "Missing shipping information", fix: "Publish a shipping information page with delivery timelines.", groupId: "shipping", weight: 0.2 },
@@ -239,11 +239,13 @@ export function scanThemeContent(input: {
   return checks
     .filter((check) => !check.terms.test(text))
     .map((check) => {
-      const estimatedImpact = Math.max(50, Math.round(atRisk * check.weight));
+      const estimatedImpact = atRisk > 0 ? Math.max(50, Math.round(atRisk * check.weight)) : 0;
       return {
         id: check.id,
         issue: check.issue,
-        impact: `$${estimatedImpact}/mo estimated revenue at risk`,
+        impact: estimatedImpact > 0
+          ? `$${estimatedImpact}/mo estimated revenue at risk`
+          : "Content coverage issue",
         recommendedFix: check.fix,
         groupId: check.groupId,
         severity: estimatedImpact >= 350 ? "high" : estimatedImpact >= 150 ? "medium" : "low",

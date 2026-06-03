@@ -116,6 +116,17 @@ describe("revenue automation", () => {
     expect(issues[0]?.recommendedFix).toMatch(/FAQ|shipping|return|warranty|guide/i);
   });
 
+  it("does not invent revenue estimates when no opportunity exists", () => {
+    const issues = scanThemeContent({
+      themeText: "Product page with reviews and secure checkout only",
+      insight: EMPTY_INSIGHT,
+    });
+
+    expect(issues.length).toBeGreaterThan(0);
+    expect(issues[0]?.estimatedImpact).toBe(0);
+    expect(issues[0]?.impact).toBe("Content coverage issue");
+  });
+
   it("defines reusable content packs with FAQ schema and publish targets", () => {
     const shippingPack = CONTENT_PACKS.find((pack) => pack.id === "shipping");
 

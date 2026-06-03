@@ -99,12 +99,15 @@ export async function loader({ request }: LoaderFunctionArgs) {
     ]);
     const analyzedProductCount = latestRun?.productCount ?? 0;
     const analyzedMessageCount = latestRun?.messageCount ?? 0;
+    const latestInsight = latestRun ? parseRun(latestRun) : null;
+    const hasActionableInsight = hasActionableRecoveryInsight(latestInsight);
     const isDataStale = latestRun != null && (
       recentMessageCount !== analyzedMessageCount ||
       productCount !== analyzedProductCount
     );
     const isDevMode = process.env.NODE_ENV !== "production";
-    const analysisGate = canRunAnalysis(usage);
+    const bypassAnalysisLimit = recentMessageCount > 0 && (!hasActionableInsight || isDataStale);
+    const analysisGate = canRunAnalysis(usage, { bypass: bypassAnalysisLimit });
 
     const analysisDebug = debugMode === "analysis" ? {
       analyzedProductCount,
@@ -117,6 +120,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
       weeklyLimitBlocking: !analysisGate.allowed,
       reason: isDataStale
         ? "Products or messages changed since last analysis — bypass active"
+        : !hasActionableInsight && recentMessageCount > 0
+          ? "No actionable analysis exists yet — bypass active"
         : !analysisGate.allowed
           ? "Weekly limit reached and data is current"
           : "ok — analysis can run normally",
@@ -282,7 +287,9 @@ export async function action({ request }: ActionFunctionArgs) {
         error: "No customer questions found yet. Syncing products is useful, but analysis needs imported chats, emails, support messages, or order notes.",
       });
     }
-    const gate = canRunAnalysis(usage, { bypass: isDevMode || isDataStale });
+    const latestInsightForStale = latestRunForStale ? parseRun(latestRunForStale) : null;
+    const hasActionableInsight = hasActionableRecoveryInsight(latestInsightForStale);
+    const gate = canRunAnalysis(usage, { bypass: isDevMode || isDataStale || !hasActionableInsight });
     if (!gate.allowed) return json({ error: gate.reason }, { status: 403 });
     const importedMessage = getDelegate(prisma, "importedMessage");
     const stored = importedMessage?.findMany
@@ -404,7 +411,15 @@ export default function ImportPage() {
         <Form method="post">
           <input type="hidden" name="intent" value="analyze" />
           <input type="hidden" name="actionKey" value={makeActionKey("run:analysis")} />
-          <Button variant="primary" submit loading={loadingFor(makeActionKey("run:analysis"))} disabled={loadingFor(makeActionKey("run:analysis"))} onClick={() => markPending(makeActionKey("run:analysis"))}>Run analysis</Button>
+          <Button
+            variant="primary"
+            submit
+            loading={loadingFor(makeActionKey("run:analysis"))}
+            disabled={!analysisGateAllowed || loadingFor(makeActionKey("run:analysis"))}
+            onClick={() => markPending(makeActionKey("run:analysis"))}
+          >
+            Run analysis
+          </Button>
         </Form>
       ) : <Button url="/app/import#customer-messages" variant="primary">Add customer questions</Button>}
     >
@@ -674,7 +689,7 @@ export default function ImportPage() {
                 variant="primary"
                 submit
                 loading={loadingFor(makeActionKey("run:analysis"))}
-                disabled={recentMessageCount === 0 || loadingFor(makeActionKey("run:analysis"))}
+                disabled={recentMessageCount === 0 || !analysisGateAllowed || loadingFor(makeActionKey("run:analysis"))}
                 onClick={() => markPending(makeActionKey("run:analysis"))}
               >
                 Run analysis
