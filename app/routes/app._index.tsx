@@ -189,6 +189,7 @@ export default function Dashboard() {
   const {
     insight,
     isEmpty,
+    needsAnalysis,
     revenueOpportunity: revenue,
     recommendedActions,
     importedMessages,
@@ -316,6 +317,70 @@ export default function Dashboard() {
     );
   }
 
+  if (needsAnalysis) {
+    return (
+      <AppPage
+        title="Revenue Recovery Dashboard"
+        subtitle="Turn customer questions into recovered revenue."
+        primaryAction={<Button url="/app/import" variant="primary">Run Analysis</Button>}
+        secondaryAction={<Button url="/app/import">Review Imported Data</Button>}
+      >
+        {syncError ? (
+          <Banner tone="warning" title="Data sync needs attention">
+            <p>{syncError}</p>
+          </Banner>
+        ) : null}
+        {reauthorizeRequired ? (
+          <Banner tone="warning" title="Reconnect Shopify sync">
+            <p>{reauthorizeReason}</p>
+            <InlineStack gap="200">
+              <Button url={reauthorizeUrl ?? "/app/import"} variant="primary">Reauthorize Shopify</Button>
+            </InlineStack>
+          </Banner>
+        ) : null}
+        <EmptyStateCard
+          title="Analyze imported questions to build your recovery plan"
+          body="Your customer questions are imported. Run analysis next to find the buying objections, product gaps, and revenue opportunities worth fixing first."
+          actionLabel="Run Analysis"
+          actionUrl="/app/import"
+        />
+        <OnboardingChecklist
+          title="Finish setup"
+          steps={[
+            {
+              title: "Step 1 — Import Your Data",
+              description: "Customer questions are available for analysis.",
+              completed: true,
+              actionLabel: "Review data",
+              actionUrl: "/app/import",
+            },
+            {
+              title: "Step 2 — Analyze Buying Questions",
+              description: "Create the recovery plan from imported questions and synced product data.",
+              completed: false,
+              actionLabel: "Run analysis",
+              actionUrl: "/app/import",
+            },
+            {
+              title: "Step 3 — Generate Recovery Content",
+              description: "Create FAQ answers and content pages after analysis identifies the highest-value gaps.",
+              completed: false,
+              actionLabel: "Open FAQ builder",
+              actionUrl: "/app/faq",
+            },
+            {
+              title: "Step 4 — Publish to Your Store",
+              description: "Push approved answers live once recovery content is ready.",
+              completed: publishedTotal > 0,
+              actionLabel: "Publish content",
+              actionUrl: "/app/publish",
+            },
+          ]}
+        />
+      </AppPage>
+    );
+  }
+
   const totalCompetitorMentions = insight.competitors.reduce((sum, c) => sum + (c.count || 0), 0);
   const competitorPressure = Math.min(
     100,
@@ -363,8 +428,12 @@ export default function Dashboard() {
       targetUrl: "/app/faq",
     },
   ];
-  const recoveryQueue = (recommendedActions.length > 0 ? recommendedActions : fallbackActions).slice(0, 3);
   const productFixQueue = productCount > 0 ? insight.contentGaps.slice(0, 5) : [];
+  const recoveryQueue = recommendedActions.slice(0, 3);
+  const bestFirstAction = recoveryQueue[0]?.title
+    ?? productFixQueue[0]?.recommendedActions[0]
+    ?? fallbackActions[0]?.title
+    ?? "Generate recovery content";
 
   return (
     <AppPage
@@ -476,7 +545,42 @@ export default function Dashboard() {
             actionLabel="Generate Recovery Content"
             actionUrl="/app/faq"
           />
-          {productFixQueue.length > 0 ? productFixQueue.map((gap, index) => {
+          {recoveryQueue.length > 0 ? recoveryQueue.map((action, index) => {
+            return (
+              <div className="cia-queue-row" key={action.id}>
+                <div className="cia-rank">{`#${index + 1}`}</div>
+                <BlockStack gap="100">
+                  <InlineStack gap="200" blockAlign="center">
+                    <Text as="h3" variant="headingMd">
+                      {action.title}
+                    </Text>
+                    <PriorityBadge level={action.priority} withLabel />
+                  </InlineStack>
+                  <Text as="p" variant="bodySm" tone="subdued">
+                    {action.mentions > 0
+                      ? `${action.mentions} affected customers`
+                      : "Add customer questions to reveal recovery actions"}
+                  </Text>
+                  <Text as="p" variant="bodyMd">
+                    {action.recommendedAction}
+                  </Text>
+                  <InlineStack gap="300">
+                    <BlockStack gap="050">
+                      <Text as="span" variant="bodySm" tone="subdued">Potential impact</Text>
+                      <div className="cia-action-impact">{action.highEstimate > 0 ? `+${moneyRange(action.lowEstimate, action.highEstimate)}/mo` : "Connect orders"}</div>
+                    </BlockStack>
+                    <BlockStack gap="050">
+                      <Text as="span" variant="bodySm" tone="subdued">Time to fix</Text>
+                      <Text as="span" variant="headingSm">{index === 0 ? "15 min" : index === 1 ? "25 min" : "30 min"}</Text>
+                    </BlockStack>
+                  </InlineStack>
+                </BlockStack>
+                <Button url={action.targetUrl} variant={index === 0 ? "primary" : undefined}>
+                  {action.ctaLabel}
+                </Button>
+              </div>
+            );
+          }) : productFixQueue.length > 0 ? productFixQueue.map((gap, index) => {
             const issue = gap.missingSections[0] ?? "Missing FAQ";
             return (
               <div className="cia-queue-row" key={`${gap.productId ?? gap.productTitle}-${issue}`}>
@@ -510,7 +614,7 @@ export default function Dashboard() {
                 </Button>
               </div>
             );
-          }) : recoveryQueue.map((action, index) => {
+          }) : fallbackActions.slice(0, 3).map((action, index) => {
             return (
               <div className="cia-queue-row" key={action.id}>
                 <div className="cia-rank">{`#${index + 1}`}</div>
@@ -564,7 +668,7 @@ export default function Dashboard() {
         />
         <KpiCard
           label="Best first action"
-          value={recoveryQueue[0]?.title ?? "Generate recovery content"}
+          value={bestFirstAction}
           detail="Fastest path to recovered revenue"
           tone="success"
         />

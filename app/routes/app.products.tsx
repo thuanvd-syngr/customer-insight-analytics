@@ -28,18 +28,20 @@ type SyncedProductRow = {
   vendor: string | null;
   productType: string | null;
   syncedAt: string;
+  syncedAtLabel: string;
   shopifyUpdatedAt: string | null;
   hasDescription: boolean;
 };
 
-function formatDateTime(value: string | null): string {
+function formatDateTimeUtc(value: Date | string | null): string {
   if (!value) return "Unknown";
-  return new Intl.DateTimeFormat("en", {
+  return new Intl.DateTimeFormat("en-US", {
     month: "short",
     day: "numeric",
     hour: "2-digit",
     minute: "2-digit",
-  }).format(new Date(value));
+    timeZone: "UTC",
+  }).format(typeof value === "string" ? new Date(value) : value);
 }
 
 export async function loader({ request }: LoaderFunctionArgs) {
@@ -83,6 +85,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       vendor: product.vendor,
       productType: product.productType,
       syncedAt: product.syncedAt.toISOString(),
+      syncedAtLabel: formatDateTimeUtc(product.syncedAt),
       shopifyUpdatedAt: product.shopifyUpdatedAt?.toISOString() ?? null,
       hasDescription: Boolean(product.description?.trim()),
     }));
@@ -352,7 +355,7 @@ export default function Products() {
                             <Text as="span" variant="bodyMd">{product.productType ?? "Not set"}</Text>
                           </td>
                           <td style={{ padding: "12px 8px", borderBottom: "1px solid #eef0f2", minWidth: 130 }}>
-                            <Text as="span" variant="bodyMd">{formatDateTime(product.syncedAt)}</Text>
+                            <Text as="span" variant="bodyMd">{product.syncedAtLabel}</Text>
                           </td>
                           <td style={{ padding: "12px 8px", borderBottom: "1px solid #eef0f2" }}>
                             <Badge tone={product.hasDescription ? "success" : "warning"}>

@@ -20,6 +20,19 @@ describe("dashboard loader view model", () => {
     expect(model.showQuickWins).toBe(false);
   });
 
+  it("requires analysis when messages exist but no run has been saved", () => {
+    const model = buildDashboardViewModel({
+      insight: null,
+      importedMessages: 36,
+      hasRun: false,
+    });
+
+    expect(model.isEmpty).toBe(false);
+    expect(model.needsAnalysis).toBe(true);
+    expect(model.showRevenueOpportunity).toBe(false);
+    expect(model.showQuickWins).toBe(false);
+  });
+
   it("returns stable sample-data dashboard shape", () => {
     const insight = runAnalysis(buildSampleAnalysisInput(new Date("2026-06-01T00:00:00Z")));
     const model = buildDashboardViewModel({
@@ -29,6 +42,7 @@ describe("dashboard loader view model", () => {
     });
 
     expect(model.isEmpty).toBe(false);
+    expect(model.needsAnalysis).toBe(false);
     expect(model.revenueOpportunity.headline).toContain("/mo estimated opportunity");
     expect(model.recommendedActions.length).toBeGreaterThan(0);
     expect(model.quickWins.length).toBeGreaterThan(0);

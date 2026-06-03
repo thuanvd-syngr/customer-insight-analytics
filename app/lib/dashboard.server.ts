@@ -23,6 +23,7 @@ export function buildDashboardViewModel(input: {
         targetUrl: "/app/faq",
         groupId: win.groupId,
       }));
+  const needsAnalysis = !input.hasRun && input.importedMessages > 0;
   const isEmpty = !input.hasRun && input.importedMessages === 0;
 
   return {
@@ -30,10 +31,11 @@ export function buildDashboardViewModel(input: {
     importedMessages: input.importedMessages,
     hasRun: input.hasRun,
     isEmpty,
+    needsAnalysis,
     revenueOpportunity,
     quickWins,
     recommendedActions,
-    showRevenueOpportunity: !isEmpty,
-    showQuickWins: !isEmpty && quickWins.length > 0,
+    showRevenueOpportunity: !isEmpty && !needsAnalysis,
+    showQuickWins: !isEmpty && !needsAnalysis && quickWins.length > 0,
   };
 }

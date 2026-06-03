@@ -1,7 +1,7 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import type { WeeklyEmail, WeeklyReport } from "@prisma/client";
 import { json, redirect } from "@remix-run/node";
-import { Form, useLoaderData, useNavigation } from "@remix-run/react";
+import { Form, useActionData, useLoaderData, useNavigation } from "@remix-run/react";
 import { Badge, BlockStack, Box, Button, Card, DataTable, Divider, InlineGrid, InlineStack, Text } from "@shopify/polaris";
 
 import {
@@ -122,7 +122,7 @@ export async function action({ request }: ActionFunctionArgs) {
 
   if (intent === "export") {
     const gate = canExportReport(plan);
-    if (!gate.allowed) return json({ error: gate.reason }, { status: 403 });
+    if (!gate.allowed) return json({ error: gate.reason ?? "Your plan does not include report exports." });
     const id = String(form.get("id") ?? "");
     const format = String(form.get("format") ?? "markdown");
     const weeklyReport = getDelegate(prisma, "weeklyReport");
@@ -210,7 +210,7 @@ export async function action({ request }: ActionFunctionArgs) {
   const input = { shopDomain, insight, weekStart, weekEnd };
   if (intent === "monthly" || intent === "quarterly") {
     const gate = canExportReport(plan);
-    if (!gate.allowed) return json({ error: gate.reason }, { status: 403 });
+    if (!gate.allowed) return json({ error: gate.reason ?? "Your plan does not include extended report exports." });
     if (!run || !insight) return redirect("/app/import");
     const now = new Date();
     const periodEnd = now.toISOString().slice(0, 10);
@@ -259,7 +259,7 @@ export async function action({ request }: ActionFunctionArgs) {
 
   const usage = await getUsageSnapshot(prisma, shop.id, plan, now);
   const gate = canGenerateAISummary(usage);
-  if (!gate.allowed) return json({ error: gate.reason }, { status: 403 });
+  if (!gate.allowed) return json({ error: gate.reason ?? "Your plan has reached the weekly summary limit." });
   const aiSummary = useAI
     ? await provider.generateWeeklySummary(input)
     : buildExecutiveReport(input);
@@ -296,6 +296,7 @@ export default function Reports() {
     executiveSummary,
     loadError,
   } = useLoaderData<typeof loader>();
+  const actionData = useActionData<{ error?: string }>();
   const navigation = useNavigation();
   if (navigation.state === "loading") return <ListSkeleton />;
 
@@ -351,6 +352,13 @@ export default function Reports() {
           <Card>
             <Text as="p" variant="bodyMd" tone="critical">
               {loadError}
+            </Text>
+          </Card>
+        ) : null}
+        {actionData?.error ? (
+          <Card>
+            <Text as="p" variant="bodyMd" tone="critical">
+              {actionData.error}
             </Text>
           </Card>
         ) : null}
