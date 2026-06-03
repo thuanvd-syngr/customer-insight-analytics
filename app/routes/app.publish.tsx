@@ -181,8 +181,10 @@ export async function action({ request }: ActionFunctionArgs) {
   const intent = String(form.get("intent") ?? "");
 
   const contentScopeMissing = missingScopes(session.scope, CONTENT_PUBLISH_SCOPES);
+  // PRODUCT_FAQ_PUBLISH_SCOPES is enforced inside publish-all-recovery only;
+  // there is no standalone product_faq publish intent.
   const productFaqScopeMissing = missingScopes(session.scope, PRODUCT_FAQ_PUBLISH_SCOPES);
-  const requiresContentPublish = ["publish-page", "publish-blog", "publish-all-recovery"].includes(intent);
+  const requiresContentPublish = ["publish-page", "publish-blog", "publish-all-recovery", "publish-retry"].includes(intent);
   if (requiresContentPublish && contentScopeMissing.length > 0) {
     return json({
       error: `Missing Shopify scope${contentScopeMissing.length === 1 ? "" : "s"}: ${contentScopeMissing.join(", ")}. Update app scopes, redeploy, then reinstall or reauthorize the app.`,
