@@ -68,6 +68,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
     return json({ checklist, firstRun, loadError: null });
   } catch (error) {
+    if (error instanceof Response) throw error;
     console.error("Onboarding loader failed", error);
     return json({
       checklist: null,

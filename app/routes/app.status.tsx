@@ -55,6 +55,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       loadError: null,
     });
   } catch (error) {
+    if (error instanceof Response) throw error;
     console.error("Status loader failed", error);
     return json({
       plan: "free",

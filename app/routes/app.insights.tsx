@@ -58,6 +58,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       loadError: null,
     });
   } catch (error) {
+    if (error instanceof Response) throw error;
     console.error("Insights loader failed", error);
     return json({
       insight: EMPTY_INSIGHT,

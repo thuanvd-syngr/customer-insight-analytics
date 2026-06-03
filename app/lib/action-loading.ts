@@ -58,9 +58,21 @@ export function parseShopifyScopes(scopeString: string | null | undefined): Set<
   );
 }
 
+// Shopify grants write_products/write_content and omits the corresponding read_*
+// scopes because write implies read. Mirror the same rules here so that loaders
+// and action guards that call missingScopes() don't produce false positives.
+const SCOPE_IMPLIED_BY: Record<string, string> = {
+  read_products: "write_products",
+  read_content: "write_content",
+};
+
 export function missingScopes(grantedScopes: string | null | undefined, requiredScopes: string[]): string[] {
   const granted = parseShopifyScopes(grantedScopes);
-  return requiredScopes.filter((scope) => !granted.has(scope));
+  return requiredScopes.filter((scope) => {
+    if (granted.has(scope)) return false;
+    const impliedBy = SCOPE_IMPLIED_BY[scope];
+    return !(impliedBy && granted.has(impliedBy));
+  });
 }
 
 export const CONTENT_PUBLISH_SCOPES = ["read_content", "write_content"];

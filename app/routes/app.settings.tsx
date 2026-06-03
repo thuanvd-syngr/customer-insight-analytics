@@ -35,6 +35,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       loadError: null,
     });
   } catch (error) {
+    if (error instanceof Response) throw error;
     console.error("Settings loader failed", error);
     const provider = getAIProvider();
     return json({

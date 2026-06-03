@@ -71,6 +71,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     const status = getWidgetStatus(canUseWidget, publishedFaqCount);
     return json({ plan: shop.plan, storeDomain, shopDomain: session.shop, canUseWidget, publishedFaqCount, status, loadError: null });
   } catch (error) {
+    if (error instanceof Response) throw error;
     console.error("Widget loader failed", error);
     return json({ plan: "free", storeDomain: "", shopDomain: "", canUseWidget: false, publishedFaqCount: 0, status: "locked" as WidgetStatus, loadError: "Widget data is loading. Refresh in a moment." });
   }

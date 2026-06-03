@@ -134,6 +134,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       storageReady: Boolean(faqModel),
     });
   } catch (error) {
+    if (error instanceof Response) throw error;
     console.error("FAQ route loader failed", error);
     const provider = getAIProvider();
     return json({

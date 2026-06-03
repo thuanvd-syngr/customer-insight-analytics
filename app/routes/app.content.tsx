@@ -168,6 +168,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       loadError: null,
     });
   } catch (error) {
+    if (error instanceof Response) throw error;
     console.error("Content hub loader failed", error);
     return json({
       items: [] as ContentItem[],

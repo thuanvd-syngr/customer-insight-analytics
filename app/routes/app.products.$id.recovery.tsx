@@ -132,6 +132,7 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
       loadError: null,
     });
   } catch (error) {
+    if (error instanceof Response) throw error;
     console.error("Product recovery loader failed", error);
     return json({
       productId,
@@ -218,6 +219,7 @@ export async function action({ request, params }: ActionFunctionArgs) {
 
     return json({ success: false, count: 0, error: "Unknown intent." });
   } catch (error) {
+    if (error instanceof Response) throw error;
     console.error("Product recovery action failed", error);
     return json({
       success: false,
