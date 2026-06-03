@@ -21,13 +21,26 @@ async function graph<T>(
   const operationName =
     context?.operation ??
     (query.trim().match(/^(?:query|mutation)\s+(\w+)/)?.[1] ?? query.slice(0, 60));
-  const res = await admin.graphql(query, { variables });
+  let res: Response;
+  try {
+    res = await admin.graphql(query, { variables });
+  } catch (error) {
+    throw await normalizeGraphqlTransportError(error, operationName);
+  }
   const httpStatus = res.status;
-  const body = (await res.json()) as T & {
+  let body: T & {
     data?: unknown;
     errors?: Array<{ message: string; extensions?: { code?: string } }>;
     extensions?: { cost?: unknown };
   };
+  try {
+    body = (await res.json()) as typeof body;
+  } catch (error) {
+    throw new Error(`[${operationName}] Shopify Admin GraphQL returned an unreadable response (${httpStatus}): ${errorMessage(error)}`);
+  }
+  if (httpStatus >= 400 && !body.errors?.length) {
+    throw new Error(`[${operationName}] Shopify Admin GraphQL HTTP ${httpStatus}: ${summarizeResponseBody(body)}`);
+  }
   if (body.errors?.length) {
     console.error("[shopify-data] GraphQL top-level errors", {
       shop: context?.shop,
@@ -43,6 +56,23 @@ async function graph<T>(
     throw new Error(`[${operationName}] ${errorMessages}`);
   }
   return body;
+}
+
+async function normalizeGraphqlTransportError(error: unknown, operationName: string): Promise<Error> {
+  if (error instanceof Response) {
+    const status = error.status;
+    let bodyText = "";
+    try {
+      bodyText = await error.clone().text();
+    } catch {
+      bodyText = "";
+    }
+    return new Error(
+      `[${operationName}] Shopify Admin GraphQL HTTP ${status}: ${bodyText.trim() || error.statusText || "empty response body"}`,
+    );
+  }
+  if (error instanceof Error) return error;
+  return new Error(`[${operationName}] ${errorMessage(error)}`);
 }
 
 export type SyncStepResult = {
@@ -75,11 +105,24 @@ type ShopifyProductWriteData = {
 
 function errorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
+  if (error instanceof Headers) return "Shopify Admin GraphQL request failed with empty response headers.";
+  if (error instanceof Response) return `HTTP ${error.status}: ${error.statusText || "Shopify Admin GraphQL response error"}`;
   try { return JSON.stringify(error); } catch { return String(error); }
 }
 
+function summarizeResponseBody(body: unknown): string {
+  if (body && typeof body === "object") {
+    const maybeErrors = (body as { errors?: Array<{ message?: string }> }).errors;
+    if (Array.isArray(maybeErrors) && maybeErrors.length > 0) {
+      return maybeErrors.map((error) => error.message).filter(Boolean).join("; ");
+    }
+  }
+  const message = errorMessage(body);
+  return message === "{}" ? "empty response body" : message;
+}
+
 function isAccessError(error: unknown): boolean {
-  return /(access|approved|protected|permission|scope|customer object)/i.test(errorMessage(error));
+  return /(access|approved|protected|permission|scope|customer object|unauthorized|token)/i.test(errorMessage(error));
 }
 
 function hasScope(grantedScopes: string | null | undefined, scope: string): boolean {

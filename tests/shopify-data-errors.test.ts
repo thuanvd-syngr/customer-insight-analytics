@@ -155,13 +155,38 @@ describe("no error when GraphQL response is clean", () => {
 // ---------------------------------------------------------------------------
 
 describe("non-Error exceptions propagate with meaningful content", () => {
-  it("a plain object rejection from admin.graphql propagates (not swallowed into generic message)", async () => {
+  it("a plain object rejection from admin.graphql is normalized with operation context", async () => {
     const admin: AdminLike = {
       graphql: vi.fn().mockRejectedValue({ code: "ECONNREFUSED", port: 5432 }),
     };
     const err = await fetchProducts(admin).catch((e: unknown) => e);
     expect(err).toBeDefined();
-    // The plain object should have been thrown as-is (not wrapped in "Shopify sync failed.")
-    expect((err as Record<string, unknown>).code).toBe("ECONNREFUSED");
+    expect((err as Error).message).toContain("Products");
+    expect((err as Error).message).toContain("ECONNREFUSED");
+  });
+
+  it("a thrown Shopify HTTP Response is surfaced with status and body", async () => {
+    const admin: AdminLike = {
+      graphql: vi.fn().mockRejectedValue(new Response(
+        JSON.stringify({ errors: [{ message: "Access token is invalid" }] }),
+        { status: 401, statusText: "Unauthorized" },
+      )),
+    };
+    const err = await fetchProducts(admin).catch((e: unknown) => e);
+
+    expect((err as Error).message).toContain("Products");
+    expect((err as Error).message).toContain("HTTP 401");
+    expect((err as Error).message).toContain("Access token is invalid");
+  });
+
+  it("a thrown empty Headers object does not display as raw size JSON", async () => {
+    const admin: AdminLike = {
+      graphql: vi.fn().mockRejectedValue(new Headers()),
+    };
+    const err = await fetchProducts(admin).catch((e: unknown) => e);
+
+    expect((err as Error).message).toContain("Products");
+    expect((err as Error).message).toContain("empty response headers");
+    expect((err as Error).message).not.toContain('"size":0');
   });
 });
