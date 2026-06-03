@@ -21,6 +21,13 @@ export const SCOPE_IMPLIED_BY: Record<string, string> = {
 };
 
 type SessionLike = { shop: string; id: string; scope?: string | null };
+type OfflineTokenSessionLike = {
+  shop: string;
+  id: string;
+  isOnline?: boolean;
+  expires?: Date | string | null;
+  refreshToken?: string | null;
+};
 
 function parseScopeSet(scopeStr: string | null | undefined): Set<string> {
   return new Set(
@@ -45,6 +52,42 @@ export function hasRequiredScope(
   scope: string,
 ): boolean {
   return getMissingFromRequired(grantedScopeStr, [scope]).length === 0;
+}
+
+export function isLegacyNonExpiringOfflineSession(
+  session: OfflineTokenSessionLike,
+): boolean {
+  return session.isOnline === false && (!session.expires || !session.refreshToken);
+}
+
+export function expiringOfflineTokenMessage(session: OfflineTokenSessionLike): string {
+  return `Shopify requires a fresh expiring offline token for Admin API sync. Reauthorize ${session.shop} before syncing products.`;
+}
+
+export function requireExpiringOfflineTokenOrRedirect(
+  session: OfflineTokenSessionLike,
+): void {
+  if (!isLegacyNonExpiringOfflineSession(session)) return;
+
+  console.warn("[scope-guard] Legacy non-expiring offline token detected, triggering reauth", {
+    shop: session.shop,
+    sessionId: session.id,
+    hasExpires: Boolean(session.expires),
+    hasRefreshToken: Boolean(session.refreshToken),
+  });
+
+  throw redirect(`/auth/reauthorize?shop=${encodeURIComponent(session.shop)}`);
+}
+
+export function checkExpiringOfflineTokenForAction(
+  session: OfflineTokenSessionLike,
+): { ok: true } | { ok: false; reason: string; reauthorizeUrl: string } {
+  if (!isLegacyNonExpiringOfflineSession(session)) return { ok: true };
+  return {
+    ok: false,
+    reason: expiringOfflineTokenMessage(session),
+    reauthorizeUrl: `/auth/reauthorize?shop=${encodeURIComponent(session.shop)}`,
+  };
 }
 
 /**

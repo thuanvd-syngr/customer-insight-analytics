@@ -23,7 +23,12 @@ import { isSampleDataEnabled } from "~/lib/sample-data";
 import { isReviewerMode, buildSampleInsight } from "~/lib/reviewer-mode.server";
 import { authenticate } from "~/shopify.server";
 import { ANALYSIS_MESSAGE_LIMIT, parseStringArray } from "~/lib/utils";
-import { checkScopesForAction, REQUIRED_SYNC_SCOPES } from "~/lib/scope-guard.server";
+import {
+  checkExpiringOfflineTokenForAction,
+  requireExpiringOfflineTokenOrRedirect,
+  checkScopesForAction,
+  REQUIRED_SYNC_SCOPES,
+} from "~/lib/scope-guard.server";
 import {
   AppPage,
   DashboardSkeleton,
@@ -45,6 +50,13 @@ export async function action({ request }: ActionFunctionArgs) {
       return json({ ok: false as const, error: "Unknown intent" });
     }
     const shop = await ensureShop(prisma, session.shop);
+    const tokenCheck = checkExpiringOfflineTokenForAction(session);
+    if (!tokenCheck.ok) {
+      return json({
+        ok: false as const,
+        error: `${tokenCheck.reason} Open the data hub to reauthorize and sync again.`,
+      });
+    }
     const scopeCheck = checkScopesForAction(session, REQUIRED_SYNC_SCOPES);
     if (!scopeCheck.ok) {
       const missing = scopeCheck.missing.join(", ");
@@ -117,6 +129,7 @@ export async function action({ request }: ActionFunctionArgs) {
 export async function loader({ request }: LoaderFunctionArgs) {
   try {
     const { session } = await authenticate.admin(request);
+    requireExpiringOfflineTokenOrRedirect(session);
     const shop = await ensureShop(prisma, session.shop);
     const latestRun = await getLatestRun(prisma, shop.id);
     const existingLocalData = await prisma.importedMessage.count({ where: { shopId: shop.id } });

@@ -43,7 +43,14 @@ import { logUsage } from "~/lib/log-usage.server";
 import { orderSyncStatusText, productSyncStatusText } from "~/lib/sync-status";
 import { getShopifyProductSchemaDiagnostics } from "~/lib/schema-diagnostics.server";
 import { ANALYSIS_MESSAGE_LIMIT, parseStringArray } from "~/lib/utils";
-import { requireScopesOrRedirect, checkScopesForAction, REQUIRED_SYNC_SCOPES, REQUIRED_APP_SCOPES } from "~/lib/scope-guard.server";
+import {
+  checkExpiringOfflineTokenForAction,
+  requireExpiringOfflineTokenOrRedirect,
+  requireScopesOrRedirect,
+  checkScopesForAction,
+  REQUIRED_SYNC_SCOPES,
+  REQUIRED_APP_SCOPES,
+} from "~/lib/scope-guard.server";
 
 const CUSTOMER_APPROVAL_COPY = "Protected customer data approval required for customer profiles.";
 
@@ -74,6 +81,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     // Enforce required scopes. Throws a redirect to /auth?shop=... if any are
     // missing, which re-triggers the OAuth flow for the full scope grant.
     requireScopesOrRedirect(session, REQUIRED_APP_SCOPES);
+    requireExpiringOfflineTokenOrRedirect(session);
 
     const url = new URL(request.url);
     const debugMode = process.env.NODE_ENV !== "production" ? url.searchParams.get("debug") : null;
@@ -222,6 +230,12 @@ export async function action({ request }: ActionFunctionArgs) {
   }
 
   if (intent === "sync") {
+    const tokenCheck = checkExpiringOfflineTokenForAction(session);
+    if (!tokenCheck.ok) {
+      return json({
+        error: `${tokenCheck.reason} Visit ${tokenCheck.reauthorizeUrl} to clear the stale session and reauthorize.`,
+      });
+    }
     const scopeCheck = checkScopesForAction(session, REQUIRED_SYNC_SCOPES);
     if (!scopeCheck.ok) {
       const missing = scopeCheck.missing.join(", ");

@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  checkExpiringOfflineTokenForAction,
   getMissingFromRequired,
+  isLegacyNonExpiringOfflineSession,
+  requireExpiringOfflineTokenOrRedirect,
   checkScopesForAction,
   requireScopesOrRedirect,
   REQUIRED_APP_SCOPES,
@@ -205,6 +208,55 @@ describe("checkScopesForAction — stale session blocks sync", () => {
       expect(result.missing).toContain("read_orders");
       expect(result.missing).not.toContain("read_products");
       expect(result.missing).not.toContain("read_content");
+    }
+  });
+});
+
+describe("expiring offline token guard", () => {
+  const LEGACY_OFFLINE_SESSION = {
+    shop: "test.myshopify.com",
+    id: "offline_test.myshopify.com",
+    isOnline: false,
+    expires: null,
+    refreshToken: null,
+  };
+
+  it("detects legacy non-expiring offline sessions", () => {
+    expect(isLegacyNonExpiringOfflineSession(LEGACY_OFFLINE_SESSION)).toBe(true);
+  });
+
+  it("does not flag expiring offline sessions with refresh token", () => {
+    expect(isLegacyNonExpiringOfflineSession({
+      ...LEGACY_OFFLINE_SESSION,
+      expires: new Date(Date.now() + 60_000),
+      refreshToken: "refresh-token",
+    })).toBe(false);
+  });
+
+  it("does not flag online sessions", () => {
+    expect(isLegacyNonExpiringOfflineSession({
+      ...LEGACY_OFFLINE_SESSION,
+      isOnline: true,
+    })).toBe(false);
+  });
+
+  it("redirects legacy sessions to reauthorize", () => {
+    let thrown: unknown;
+    try {
+      requireExpiringOfflineTokenOrRedirect(LEGACY_OFFLINE_SESSION);
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(Response);
+    expect((thrown as Response).headers.get("Location")).toContain("/auth/reauthorize?shop=test.myshopify.com");
+  });
+
+  it("returns an action-safe reauthorize URL", () => {
+    const result = checkExpiringOfflineTokenForAction(LEGACY_OFFLINE_SESSION);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toContain("expiring offline token");
+      expect(result.reauthorizeUrl).toBe("/auth/reauthorize?shop=test.myshopify.com");
     }
   });
 });
