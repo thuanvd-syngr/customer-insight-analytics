@@ -20,6 +20,7 @@ import { ensureShop, getLatestRun, parseRun } from "~/lib/shop.server";
 import { EMPTY_INSIGHT } from "~/lib/types";
 import { authenticate } from "~/shopify.server";
 import { ANALYSIS_EXCLUDED_MESSAGE_SOURCES } from "~/lib/utils";
+import { hasActionableRecoveryInsight } from "~/lib/insight-guards";
 
 type SyncedProductRow = {
   id: string;
@@ -79,8 +80,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
         },
       }),
     ]);
-    const hasAnalyzedQuestions = (latestRun?.messageCount ?? 0) > 0;
-    const insight = hasAnalyzedQuestions ? (parseRun(latestRun) ?? EMPTY_INSIGHT) : EMPTY_INSIGHT;
+    const latestInsight = latestRun ? parseRun(latestRun) : null;
+    const hasAnalyzedQuestions = hasActionableRecoveryInsight(latestInsight);
+    const insight = hasAnalyzedQuestions ? (latestInsight ?? EMPTY_INSIGHT) : EMPTY_INSIGHT;
     const syncedProductRows: SyncedProductRow[] = syncedProducts.map((product) => ({
       id: product.id,
       externalId: product.externalId,

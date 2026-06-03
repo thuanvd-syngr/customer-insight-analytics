@@ -32,6 +32,7 @@ import { ensureShop, getLatestRun, parseRun } from "~/lib/shop.server";
 import { EMPTY_INSIGHT, normalizeInsightResult, type InsightResult, type KeywordGroupId } from "~/lib/types";
 import { getPublishedCounts } from "~/lib/publish/shopify-publisher.server";
 import { authenticate } from "~/shopify.server";
+import { hasActionableRecoveryInsight } from "~/lib/insight-guards";
 
 type PageDraft = {
   id: string;
@@ -191,7 +192,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
       getLatestRun(prisma, shop.id),
       prisma.importedMessage.count({ where: { shopId: shop.id } }),
     ]);
-    const hasAnalyzedQuestions = (latestRun?.messageCount ?? 0) > 0;
+    const latestInsight = latestRun ? parseRun(latestRun) : null;
+    const hasAnalyzedQuestions = hasActionableRecoveryInsight(latestInsight);
     const sampleMode = !latestRun && existingLocalData === 0
       ? await isReviewerMode(prisma, shop.id)
       : false;
@@ -209,7 +211,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
         ? Promise.resolve(null)
         : appSetting.findUnique({ where: { shopId_key: { shopId: shop.id, key: "recoveryPageDrafts" } } }),
     ]);
-    const insight = normalizeInsightResult(sampleMode ? buildSampleInsight() : (hasAnalyzedQuestions ? parseRun(latestRun) : EMPTY_INSIGHT));
+    const insight = normalizeInsightResult(sampleMode ? buildSampleInsight() : (hasAnalyzedQuestions ? latestInsight : EMPTY_INSIGHT));
     const counts = publishedCounts as PublishedCountsLike;
     const faqs = generatedFaqs as GeneratedFaqLike[];
     const plan = buildRecoveryPlan({ insight, publishedCounts: counts, generatedFaqs: faqs });
@@ -261,8 +263,9 @@ export async function action({ request }: ActionFunctionArgs) {
       return json<ActionResult>({ summary: { createdFaqs: 5, pageDrafts: 4, sampleOnly: true } });
     }
     const latestRun = await getLatestRun(prisma, shop.id);
-    const hasAnalyzedQuestions = (latestRun?.messageCount ?? 0) > 0;
-    const insight = normalizeInsightResult(hasAnalyzedQuestions ? parseRun(latestRun) : EMPTY_INSIGHT);
+    const latestInsight = latestRun ? parseRun(latestRun) : null;
+    const hasAnalyzedQuestions = hasActionableRecoveryInsight(latestInsight);
+    const insight = normalizeInsightResult(hasAnalyzedQuestions ? latestInsight : EMPTY_INSIGHT);
     if (intent === "generate-plan") {
       if (!hasAnalyzedQuestions) {
         return json<ActionResult>({
@@ -272,6 +275,11 @@ export async function action({ request }: ActionFunctionArgs) {
       return json<ActionResult>({ summary: await createRecoveryDrafts({ shopId: shop.id, insight }) });
     }
     if (intent === "install-pack") {
+      if (!hasAnalyzedQuestions) {
+        return json<ActionResult>({
+          error: "Run analysis with imported customer questions before creating recovery drafts.",
+        });
+      }
       const packId = String(form.get("packId") ?? "");
       return json<ActionResult>({ summary: await createRecoveryDrafts({ shopId: shop.id, insight, selectedPackId: packId }) });
     }

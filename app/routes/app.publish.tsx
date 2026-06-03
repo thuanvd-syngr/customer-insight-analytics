@@ -52,6 +52,7 @@ import { publishGeneratedFaq } from "~/lib/shopify-publish.server";
 import { EMPTY_INSIGHT } from "~/lib/types";
 import { authenticate } from "~/shopify.server";
 import { AppPage, SectionHeader, formatNumber } from "~/components";
+import { hasActionableRecoveryInsight } from "~/lib/insight-guards";
 
 async function getContext(request: Request) {
   const { session, admin } = await authenticate.admin(request);
@@ -107,8 +108,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
         ? bulkJob.findMany({ where: { shopId: shop.id, jobType: "publish_pages" }, orderBy: { createdAt: "desc" }, take: 3 })
         : [],
     ]);
-    const hasInsight = (latestRun?.messageCount ?? 0) > 0;
-    const insight = hasInsight ? (parseRun(latestRun) ?? EMPTY_INSIGHT) : EMPTY_INSIGHT;
+    const latestInsight = latestRun ? parseRun(latestRun) : null;
+    const hasInsight = hasActionableRecoveryInsight(latestInsight);
+    const insight = hasInsight ? (latestInsight ?? EMPTY_INSIGHT) : EMPTY_INSIGHT;
     const pagePreview = hasInsight ? ALL_PAGE_CONTENT_TYPES.map((contentType) => ({
       contentType,
       label: PAGE_TYPE_LABELS[contentType],
@@ -193,9 +195,9 @@ export async function action({ request }: ActionFunctionArgs) {
   }
   if (requiresContentPublish) {
     const latestRun = await getLatestRun(prisma, shop.id);
-    if ((latestRun?.messageCount ?? 0) === 0) {
+    if (!hasActionableRecoveryInsight(latestRun ? parseRun(latestRun) : null)) {
       return json({
-        error: "Import customer questions and run analysis before publishing recovery content.",
+        error: "Import customer questions that reveal buying objections, then run analysis before publishing recovery content.",
       }, { status: 400 });
     }
   }

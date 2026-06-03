@@ -40,6 +40,7 @@ import {
   ScoreGauge,
   moneyRange,
 } from "~/components";
+import { hasActionableRecoveryInsight } from "~/lib/insight-guards";
 
 export async function action({ request }: ActionFunctionArgs) {
   try {
@@ -85,7 +86,7 @@ export async function action({ request }: ActionFunctionArgs) {
         .split(/[\n,]/)
         .map((t) => t.trim())
         .filter(Boolean);
-      await saveInsightRun(prisma, shop.id, runAnalysis({
+      const result = runAnalysis({
         messages: stored.map((m) => ({
           id: m.id,
           content: m.content,
@@ -108,8 +109,11 @@ export async function action({ request }: ActionFunctionArgs) {
         competitorTerms,
         now: new Date(),
         windowDays: 30,
-      }), 30, totalProductCount);
-      await markOnboarded(prisma, shop.id);
+      });
+      if (hasActionableRecoveryInsight(result)) {
+        await saveInsightRun(prisma, shop.id, result, 30, totalProductCount);
+        await markOnboarded(prisma, shop.id);
+      }
     }
     const dataFound = (autoSync.products.count ?? 0) > 0 || (autoSync.messages ?? 0) > 0;
     const syncErrors = [
@@ -137,13 +141,14 @@ export async function loader({ request }: LoaderFunctionArgs) {
       }),
       prisma.importedMessage.count({ where: { shopId: shop.id } }),
     ]);
-    const hasAnalyzedQuestions = (latestRun?.messageCount ?? 0) > 0;
+    const latestInsight = latestRun ? parseRun(latestRun) : null;
+    const hasAnalyzedQuestions = hasActionableRecoveryInsight(latestInsight);
     const autoSyncNeeded = tokenCheck.ok && !latestRun && existingLocalData === 0;
     const sampleMode = !latestRun && existingLocalData === 0
       ? await isReviewerMode(prisma, shop.id)
       : false;
     const insight = normalizeInsightResult(
-      sampleMode ? buildSampleInsight() : (hasAnalyzedQuestions ? parseRun(latestRun) : EMPTY_INSIGHT),
+      sampleMode ? buildSampleInsight() : (hasAnalyzedQuestions ? latestInsight : EMPTY_INSIGHT),
     );
     const [importedMessages, orderCount, productCount, publishedCounts] = await Promise.all([
       prisma.importedMessage.count({
@@ -198,6 +203,7 @@ export default function Dashboard() {
     insight,
     isEmpty,
     needsAnalysis,
+    noFindings,
     revenueOpportunity: revenue,
     recommendedActions,
     importedMessages,
@@ -384,6 +390,33 @@ export default function Dashboard() {
               actionUrl: "/app/publish",
             },
           ]}
+        />
+      </AppPage>
+    );
+  }
+
+  if (noFindings) {
+    return (
+      <AppPage
+        title="Revenue Recovery Dashboard"
+        subtitle="Turn customer questions into recovered revenue."
+        primaryAction={<Button url="/app/import" variant="primary">Add More Questions</Button>}
+        secondaryAction={<Button url="/app/import">Review Imported Data</Button>}
+      >
+        {!isSampleMode && orderCount === 0 ? (
+          <Banner tone="info" title="Connect order history to unlock revenue estimates">
+            <p>Sync your orders so revenue estimates can be calculated when buying objections are detected.</p>
+            <InlineStack gap="200">
+              <Button url="/app/import" variant="primary">Sync Order History</Button>
+              <Button url="/app/settings">Set Average Order Value</Button>
+            </InlineStack>
+          </Banner>
+        ) : null}
+        <EmptyStateCard
+          title="No buying objections detected yet"
+          body="The imported question did not match a recovery topic like shipping, returns, payment, sizing, stock, discounts, warranty, ingredients, usage, or competitor comparisons. Add more real chats, emails, support messages, or order notes to build a recovery plan."
+          actionLabel="Add More Customer Questions"
+          actionUrl="/app/import"
         />
       </AppPage>
     );

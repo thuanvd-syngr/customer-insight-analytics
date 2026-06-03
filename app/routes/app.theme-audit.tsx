@@ -12,6 +12,7 @@ import { scanThemeContent } from "~/lib/revenue-automation";
 import { ensureShop, getLatestRun, parseRun } from "~/lib/shop.server";
 import { EMPTY_INSIGHT, normalizeInsightResult } from "~/lib/types";
 import { authenticate } from "~/shopify.server";
+import { hasActionableRecoveryInsight } from "~/lib/insight-guards";
 
 type ActionResult = { scanned?: boolean; issueCount?: number; noContent?: boolean; error?: string };
 
@@ -66,7 +67,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
     // Only run scanThemeContent when there is actual content to scan.
     // An empty themeText would produce all 6 phantom issues (every term absent),
     // which is misleading when no products have been synced yet.
-    const insight = normalizeInsightResult(sampleMode ? buildSampleInsight() : (parseRun(latestRun) ?? EMPTY_INSIGHT));
+    const latestInsight = latestRun ? parseRun(latestRun) : null;
+    const insight = normalizeInsightResult(sampleMode ? buildSampleInsight() : (hasActionableRecoveryInsight(latestInsight) ? latestInsight : EMPTY_INSIGHT));
     const issues = hasContent ? scanThemeContent({ themeText, insight }) : [];
     return json({
       hasThemeSignal: hasContent,
@@ -102,7 +104,8 @@ export async function action({ request }: ActionFunctionArgs) {
     if (!hasContent) {
       return json<ActionResult>({ scanned: true, issueCount: 0, noContent: true });
     }
-    const insight = normalizeInsightResult(sampleMode ? buildSampleInsight() : (parseRun(latestRun) ?? EMPTY_INSIGHT));
+    const latestInsight = latestRun ? parseRun(latestRun) : null;
+    const insight = normalizeInsightResult(sampleMode ? buildSampleInsight() : (hasActionableRecoveryInsight(latestInsight) ? latestInsight : EMPTY_INSIGHT));
     const issues = scanThemeContent({ themeText, insight });
     return json<ActionResult>({ scanned: true, issueCount: issues.length });
   } catch (error) {

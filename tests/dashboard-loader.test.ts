@@ -49,6 +49,32 @@ describe("dashboard loader view model", () => {
     expect(model.showQuickWins).toBe(true);
   });
 
+  it("treats completed runs with no findings as not actionable", () => {
+    const model = buildDashboardViewModel({
+      insight: {
+        insightScore: 100,
+        messageCount: 1,
+        keywordGroups: [],
+        productConfusion: [],
+        faqOpportunities: [],
+        competitors: [],
+        revenueLeakage: [],
+        questionOpportunities: [],
+        storewideOpportunities: [],
+        recommendedActions: [],
+        contentGaps: [],
+        weeklyTrend: [],
+      },
+      importedMessages: 1,
+      hasRun: true,
+    });
+
+    expect(model.noFindings).toBe(true);
+    expect(model.hasActionableInsight).toBe(false);
+    expect(model.showRevenueOpportunity).toBe(false);
+    expect(model.showQuickWins).toBe(false);
+  });
+
   it("does not require revenueOpportunity on legacy runs", () => {
     const model = buildDashboardViewModel({
       insight: {

@@ -1,4 +1,5 @@
 import { EMPTY_INSIGHT, normalizeInsightResult, type InsightResult } from "~/lib/types";
+import { hasActionableRecoveryInsight } from "~/lib/insight-guards";
 
 export function buildDashboardViewModel(input: {
   insight: Partial<InsightResult> | null | undefined;
@@ -25,6 +26,8 @@ export function buildDashboardViewModel(input: {
       }));
   const needsAnalysis = !input.hasRun && input.importedMessages > 0;
   const isEmpty = !input.hasRun && input.importedMessages === 0;
+  const hasActionableInsight = hasActionableRecoveryInsight(insight);
+  const noFindings = input.hasRun && !hasActionableInsight;
 
   return {
     insight,
@@ -32,10 +35,12 @@ export function buildDashboardViewModel(input: {
     hasRun: input.hasRun,
     isEmpty,
     needsAnalysis,
+    noFindings,
+    hasActionableInsight,
     revenueOpportunity,
     quickWins,
     recommendedActions,
-    showRevenueOpportunity: !isEmpty && !needsAnalysis,
-    showQuickWins: !isEmpty && !needsAnalysis && quickWins.length > 0,
+    showRevenueOpportunity: !isEmpty && !needsAnalysis && hasActionableInsight,
+    showQuickWins: !isEmpty && !needsAnalysis && hasActionableInsight && quickWins.length > 0,
   };
 }

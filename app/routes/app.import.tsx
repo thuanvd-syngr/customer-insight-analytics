@@ -27,6 +27,7 @@ import {
 } from "~/lib/billing";
 import { parseImport, sanitizeImportSource } from "~/lib/import";
 import { runAnalysis } from "~/lib/engine";
+import { hasActionableRecoveryInsight } from "~/lib/insight-guards";
 import { syncShopifyData } from "~/lib/shopify-data.server";
 import type { ShopifySyncResult } from "~/lib/shopify-data.server";
 import type { ImportedMessage } from "@prisma/client";
@@ -328,9 +329,15 @@ export async function action({ request }: ActionFunctionArgs) {
       now,
       windowDays: 30,
     };
+    const result = runAnalysis(input);
+    if (!hasActionableRecoveryInsight(result)) {
+      return json({
+        error: "Analysis ran, but no buying objections were detected. Add questions about shipping, returns, payment, sizing, stock, discounts, warranty, usage, ingredients, or competitor comparisons.",
+      });
+    }
     // Use the real DB total (currentProductCountForStale) so the staleness check
     // never disagrees with itself regardless of how many products were sampled.
-    await saveInsightRun(prisma, shop.id, runAnalysis(input), 30, currentProductCountForStale);
+    await saveInsightRun(prisma, shop.id, result, 30, currentProductCountForStale);
     await incrementUsage(prisma, shop.id, "analyses", isoWeekPeriod(now), 1);
     await markOnboarded(prisma, shop.id);
     await logUsage(prisma, shop.id, "insight_run", { messageCount: currentMessageCount });

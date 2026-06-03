@@ -49,6 +49,7 @@ import { ensureShop, getLatestRun, parseRun } from "~/lib/shop.server";
 import { normalizeInsightResult } from "~/lib/types";
 import { authenticate } from "~/shopify.server";
 import { getDelegate } from "~/lib/prisma-safe";
+import { hasActionableRecoveryInsight } from "~/lib/insight-guards";
 
 async function context(request: Request) {
   const { session } = await authenticate.admin(request);
@@ -82,8 +83,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
         ? appSetting.findUnique({ where: { shopId_key: { shopId: shop.id, key: "reportEmail" } } })
         : Promise.resolve(null),
     ]);
-  const hasAnalyzedQuestions = (latestRun?.messageCount ?? 0) > 0;
-  const latestInsight = hasAnalyzedQuestions ? parseRun(latestRun) : null;
+  const parsedLatestInsight = latestRun ? parseRun(latestRun) : null;
+  const hasAnalyzedQuestions = hasActionableRecoveryInsight(parsedLatestInsight);
+  const latestInsight = hasAnalyzedQuestions ? parsedLatestInsight : null;
   const roiEstimate = latestInsight ? buildROIEstimate(latestInsight, publishedCounts) : null;
   return json({
     reports,
@@ -201,8 +203,9 @@ export async function action({ request }: ActionFunctionArgs) {
 
   const now = new Date();
   const run = await getLatestRun(prisma, shop.id);
-  const hasAnalyzedQuestions = (run?.messageCount ?? 0) > 0;
-  const insight = hasAnalyzedQuestions ? parseRun(run) : null;
+  const parsedInsight = run ? parseRun(run) : null;
+  const hasAnalyzedQuestions = hasActionableRecoveryInsight(parsedInsight);
+  const insight = hasAnalyzedQuestions ? parsedInsight : null;
   if (!run || !insight) return redirect("/app/import");
 
   const weekEnd = now.toISOString().slice(0, 10);
@@ -305,8 +308,9 @@ export default function Reports() {
   const latest = reports[0];
   // Prefer the most recent saved report snapshot; fall back to the latest run
   // so the executive report is visible as soon as an analysis exists.
-  const insight = latest
-    ? normalizeInsightResult(JSON.parse(latest.dataJson))
+  const reportInsight = latest ? normalizeInsightResult(JSON.parse(latest.dataJson)) : null;
+  const insight = reportInsight && hasActionableRecoveryInsight(reportInsight)
+    ? reportInsight
     : (latestInsight ?? null);
   const revenue = insight?.revenueOpportunity ?? null;
 

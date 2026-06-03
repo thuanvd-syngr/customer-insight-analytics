@@ -32,6 +32,7 @@ import { authenticate } from "~/shopify.server";
 import { safeCount } from "~/lib/prisma-safe";
 import { isReviewerMode, buildSampleInsight } from "~/lib/reviewer-mode.server";
 import { ANALYSIS_EXCLUDED_MESSAGE_SOURCES } from "~/lib/utils";
+import { hasActionableRecoveryInsight } from "~/lib/insight-guards";
 
 export async function loader({ request }: LoaderFunctionArgs) {
   try {
@@ -44,12 +45,13 @@ export async function loader({ request }: LoaderFunctionArgs) {
       }),
     ]);
     const latestRun = await getLatestRun(prisma, shop.id);
-    const hasAnalyzedQuestions = (latestRun?.messageCount ?? 0) > 0;
+    const latestInsight = latestRun ? parseRun(latestRun) : null;
+    const hasAnalyzedQuestions = hasActionableRecoveryInsight(latestInsight);
     const sampleMode = !latestRun && importedMessageCount === 0
       ? await isReviewerMode(prisma, shop.id)
       : false;
     return json({
-      insight: normalizeInsightResult(sampleMode ? buildSampleInsight() : (hasAnalyzedQuestions ? parseRun(latestRun) : EMPTY_INSIGHT)),
+      insight: normalizeInsightResult(sampleMode ? buildSampleInsight() : (hasAnalyzedQuestions ? latestInsight : EMPTY_INSIGHT)),
       productCount,
       importedMessageCount,
       isSampleMode: sampleMode,
