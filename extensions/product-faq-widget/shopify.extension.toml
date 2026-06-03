@@ -1,9 +1,5 @@
-api_version = "2026-01"
-
 [[extensions]]
 type = "theme"
 name = "Product FAQ Widget"
 handle = "product-faq-widget"
-
-  [[extensions.targeting]]
-  target = "section-group"
+uid = "9844cd55-59aa-a91c-b5c1-c6bacff649596c17ce7b"
