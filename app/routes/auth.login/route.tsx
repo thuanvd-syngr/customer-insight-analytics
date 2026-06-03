@@ -8,7 +8,16 @@ import { login } from "~/shopify.server";
 import { loginErrorMessage } from "./error.server";
 
 export async function loader({ request }: LoaderFunctionArgs) {
+  const url = new URL(request.url);
+  const shop = url.searchParams.get("shop");
+  if (shop) {
+    // Arrived via /auth/reauthorize or a direct link — login() will read the
+    // shop param from the URL and redirect to Shopify OAuth automatically.
+    console.info("[auth.login] received shop param, initiating OAuth", { shop });
+  }
   const errors = await login(request);
+  // login() throws a redirect to Shopify OAuth when shop is present and valid.
+  // Reaching here means shop was missing or invalid — show the manual form.
   return json({ error: loginErrorMessage(errors) });
 }
 
