@@ -19,7 +19,7 @@ const server = spawn(
   {
     stdio: "inherit",
     shell: false,
-    env: { ...process.env, HOST: "0.0.0.0", PORT: port },
+    env: { ...process.env, NODE_ENV: "production", HOST: "0.0.0.0", PORT: port },
   },
 );
 

@@ -281,58 +281,70 @@ export default function BulkPage() {
           </div>
         </div>
 
-        <Card>
-          <BlockStack gap="400">
-            <SectionHeader
-              title="Start Bulk Job"
-              description="Select a job type and filter, then start processing. Items run in batches of 10 with up to 2 retries."
-            />
-            <Form method="post">
-              <input type="hidden" name="intent" value="start-bulk" />
-              <input type="hidden" name="actionKey" value={bulkKey} />
-              <BlockStack gap="300">
-                <InlineGrid columns={{ xs: 1, sm: 2 }} gap="300">
-                  <BlockStack gap="150">
-                    <Select
-                      label="Job type"
-                      options={jobTypeOptions}
-                      value={jobType}
-                      onChange={setJobType}
-                      disabled={!canBulk}
-                    />
-                    <input type="hidden" name="jobType" value={jobType} />
-                  </BlockStack>
-                  <BlockStack gap="150">
-                    <Select
-                      label="Filter"
-                      options={filterOptions}
-                      value={filterType}
-                      onChange={setFilterType}
-                      disabled={!canBulk}
-                    />
-                    <input type="hidden" name="filterType" value={filterType} />
-                  </BlockStack>
-                </InlineGrid>
-                <Text as="p" variant="bodySm" tone="subdued">
-                  {`${formatNumber(filteredCount)} item${filteredCount === 1 ? "" : "s"} will be processed by this job.`}
-                </Text>
-                <Button
-                  submit
-                  variant="primary"
-                  loading={isSubmitting}
-                  disabled={!canBulk || filteredCount === 0}
-                  onClick={() => {
-                    setPendingActionKey(bulkKey);
-                    setPendingStartedAt(Date.now());
-                    setTimeoutWarning(false);
-                  }}
-                >
-                  {isSubmitting ? "Starting job…" : `Start Bulk Job (${formatNumber(filteredCount)} items)`}
-                </Button>
-              </BlockStack>
-            </Form>
-          </BlockStack>
-        </Card>
+        {canBulk ? (
+          <Card>
+            <BlockStack gap="400">
+              <SectionHeader
+                title="Start Bulk Job"
+                description="Select a job type and filter, then start processing. Items run in batches of 10 with up to 2 retries."
+              />
+              <Form method="post">
+                <input type="hidden" name="intent" value="start-bulk" />
+                <input type="hidden" name="actionKey" value={bulkKey} />
+                <BlockStack gap="300">
+                  <InlineGrid columns={{ xs: 1, sm: 2 }} gap="300">
+                    <BlockStack gap="150">
+                      <Select
+                        label="Job type"
+                        options={jobTypeOptions}
+                        value={jobType}
+                        onChange={setJobType}
+                      />
+                      <input type="hidden" name="jobType" value={jobType} />
+                    </BlockStack>
+                    <BlockStack gap="150">
+                      <Select
+                        label="Filter"
+                        options={filterOptions}
+                        value={filterType}
+                        onChange={setFilterType}
+                      />
+                      <input type="hidden" name="filterType" value={filterType} />
+                    </BlockStack>
+                  </InlineGrid>
+                  <Text as="p" variant="bodySm" tone="subdued">
+                    {`${formatNumber(filteredCount)} item${filteredCount === 1 ? "" : "s"} will be processed by this job.`}
+                  </Text>
+                  <Button
+                    submit
+                    variant="primary"
+                    loading={isSubmitting}
+                    disabled={filteredCount === 0}
+                    onClick={() => {
+                      setPendingActionKey(bulkKey);
+                      setPendingStartedAt(Date.now());
+                      setTimeoutWarning(false);
+                    }}
+                  >
+                    {isSubmitting ? "Starting job…" : `Start Bulk Job (${formatNumber(filteredCount)} items)`}
+                  </Button>
+                </BlockStack>
+              </Form>
+            </BlockStack>
+          </Card>
+        ) : (
+          <Card>
+            <BlockStack gap="300">
+              <SectionHeader
+                title="Bulk Actions Locked"
+                description="Upgrade to Pro to run generation, publishing, export, and resolve jobs across multiple opportunities."
+              />
+              <InlineStack>
+                <Button url="/app/billing" variant="primary">Upgrade to Pro</Button>
+              </InlineStack>
+            </BlockStack>
+          </Card>
+        )}
 
         {recentJobs.length === 0 ? (
           <EmptyStateCard

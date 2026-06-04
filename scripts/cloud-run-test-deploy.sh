@@ -9,6 +9,9 @@ DB_USER="${DB_USER:-postgres}"
 PROJECT_ID="${PROJECT_ID:-}"
 CREATE_SQL="${CREATE_SQL:-false}"
 RUN_MIGRATION_JOB="${RUN_MIGRATION_JOB:-false}"
+SHOPIFY_API_KEY_SECRET="${SHOPIFY_API_KEY_SECRET:-customer-insight-shopify-api-key}"
+SHOPIFY_API_SECRET_SECRET="${SHOPIFY_API_SECRET_SECRET:-customer-insight-shopify-api-secret}"
+DATABASE_URL_SECRET="${DATABASE_URL_SECRET:-customer-insight-database-url}"
 
 usage() {
   cat <<'EOF'
@@ -25,11 +28,14 @@ Optional:
   DB_USER=postgres
   CREATE_SQL=true          Create Cloud SQL instance and database before deploy.
   RUN_MIGRATION_JOB=true   Create/execute a Cloud Run migration job after deploy.
+  SHOPIFY_API_KEY_SECRET=customer-insight-shopify-api-key
+  SHOPIFY_API_SECRET_SECRET=customer-insight-shopify-api-secret
+  DATABASE_URL_SECRET=customer-insight-database-url
 
 Required Secret Manager secrets before deploy:
-  SHOPIFY_API_KEY
-  SHOPIFY_API_SECRET
-  DATABASE_URL
+  customer-insight-shopify-api-key
+  customer-insight-shopify-api-secret
+  customer-insight-database-url
 
 Example:
   PROJECT_ID=my-project CREATE_SQL=true ./scripts/cloud-run-test-deploy.sh
@@ -54,7 +60,7 @@ command -v gcloud >/dev/null 2>&1 || {
 
 SQL_CONNECTION="${PROJECT_ID}:${REGION}:${SQL_INSTANCE}"
 TEMP_URL="https://TEMP_REPLACE_AFTER_DEPLOY"
-SCOPES="read_products,read_orders,read_content"
+SCOPES="read_products,write_products,read_orders,read_content,write_content"
 
 echo "Using project: ${PROJECT_ID}"
 gcloud config set project "$PROJECT_ID"
@@ -87,7 +93,7 @@ if [[ "$CREATE_SQL" == "true" ]]; then
   echo "gcloud sql users set-password ${DB_USER} --instance=${SQL_INSTANCE} --password='CHANGE_ME_STRONG_PASSWORD'"
 fi
 
-for secret in SHOPIFY_API_KEY SHOPIFY_API_SECRET DATABASE_URL; do
+for secret in "$SHOPIFY_API_KEY_SECRET" "$SHOPIFY_API_SECRET_SECRET" "$DATABASE_URL_SECRET"; do
   if ! gcloud secrets describe "$secret" >/dev/null 2>&1; then
     echo "Missing Secret Manager secret: ${secret}" >&2
     echo "Create it before deploy. See docs/CLOUD_RUN_TEST_DEPLOY.md." >&2
@@ -102,7 +108,7 @@ gcloud run deploy "$SERVICE_NAME" \
   --allow-unauthenticated \
   --add-cloudsql-instances "$SQL_CONNECTION" \
   --set-env-vars "NODE_ENV=production,SHOPIFY_BILLING_TEST=true,SHOPIFY_APP_URL=${TEMP_URL},HOST=${TEMP_URL},SCOPES=${SCOPES}" \
-  --set-secrets "SHOPIFY_API_KEY=SHOPIFY_API_KEY:latest,SHOPIFY_API_SECRET=SHOPIFY_API_SECRET:latest,DATABASE_URL=DATABASE_URL:latest"
+  --set-secrets "SHOPIFY_API_KEY=${SHOPIFY_API_KEY_SECRET}:latest,SHOPIFY_API_SECRET=${SHOPIFY_API_SECRET_SECRET}:latest,DATABASE_URL=${DATABASE_URL_SECRET}:latest"
 
 CLOUD_RUN_URL="$(gcloud run services describe "$SERVICE_NAME" --region "$REGION" --format='value(status.url)')"
 
@@ -124,7 +130,7 @@ if [[ "$RUN_MIGRATION_JOB" == "true" ]]; then
       --region "$REGION" \
       --source . \
       --set-cloudsql-instances "$SQL_CONNECTION" \
-      --set-secrets "DATABASE_URL=DATABASE_URL:latest,SHOPIFY_API_KEY=SHOPIFY_API_KEY:latest,SHOPIFY_API_SECRET=SHOPIFY_API_SECRET:latest" \
+      --set-secrets "DATABASE_URL=${DATABASE_URL_SECRET}:latest,SHOPIFY_API_KEY=${SHOPIFY_API_KEY_SECRET}:latest,SHOPIFY_API_SECRET=${SHOPIFY_API_SECRET_SECRET}:latest" \
       --set-env-vars "NODE_ENV=production" \
       --command npx \
       --args prisma,migrate,deploy

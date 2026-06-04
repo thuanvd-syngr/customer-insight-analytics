@@ -15,37 +15,59 @@ import {
 } from "@shopify/polaris";
 
 import prisma from "~/db.server";
-import { ensureShop, getLatestRun } from "~/lib/shop.server";
+import { ensureShop, getLatestRun, parseRun, setShopPlan } from "~/lib/shop.server";
 import { authenticate } from "~/shopify.server";
 import { AppPage, DashboardSkeleton, SectionHeader, formatNumber } from "~/components";
 import { safeCount } from "~/lib/prisma-safe";
-import { PLANS } from "~/lib/billing";
+import { isBillingTestMode, PAID_PLAN_NAMES, planIdFromName, PLANS } from "~/lib/billing";
 import type { PlanId } from "~/lib/billing";
 
 async function getCtx(request: Request) {
-  const { session } = await authenticate.admin(request);
+  const { session, billing } = await authenticate.admin(request);
   const shop = await ensureShop(prisma, session.shop);
-  return { shop, session };
+  return { shop, session, billing };
 }
 
 export async function loader({ request }: LoaderFunctionArgs) {
   try {
-    const { shop } = await getCtx(request);
-    const plan = shop.plan as PlanId;
+    const { shop, session, billing } = await getCtx(request);
+    const billingCheck = await billing.check({
+      plans: PAID_PLAN_NAMES,
+      isTest: isBillingTestMode(),
+    });
+    const activeBillingPlan = billingCheck.hasActivePayment
+      ? planIdFromName(billingCheck.appSubscriptions[0]?.name)
+      : "free";
+    if (process.env.NODE_ENV === "production" && activeBillingPlan !== shop.plan) {
+      await setShopPlan(prisma, session.shop, activeBillingPlan);
+    }
+    const plan = (process.env.NODE_ENV === "production" ? activeBillingPlan : shop.plan) as PlanId;
     const planConfig = PLANS[plan];
     const features = planConfig?.features ?? {};
 
     // Recent activity
     const lastRun = await getLatestRun(prisma, shop.id);
-    const publishedCount = await safeCount(prisma, "publishedContent", { where: { shopId: shop.id, status: "published" } });
-    const faqCount = await prisma.generatedFaq.count({ where: { shopId: shop.id } });
-    const messageCount = await prisma.importedMessage.count({ where: { shopId: shop.id } });
-    const competitorCount = await prisma.competitor.count({ where: { shopId: shop.id } });
+    const latestInsight = parseRun(lastRun);
+    const [publishedCount, faqCount, messageCount] = await Promise.all([
+      safeCount(prisma, "publishedContent", { where: { shopId: shop.id, status: "published" } }),
+      safeCount(prisma, "generatedFaq", { where: { shopId: shop.id } }),
+      safeCount(prisma, "importedMessage", { where: { shopId: shop.id } }),
+    ]);
+    const competitorCount = latestInsight?.competitors.length ?? 0;
 
     return json({
       plan,
       planLabel: planConfig?.name ?? plan,
-      features,
+      features: [
+        { key: "weeklyReports", label: "Weekly Reports", enabled: Boolean(features.weeklyReports) },
+        { key: "aiSummaries", label: "AI Summaries", enabled: Boolean(features.aiWeeklySummary) },
+        { key: "bulkPublishing", label: "Bulk Actions", enabled: Boolean(features.bulkPublishing) },
+        { key: "faqGeneration", label: "FAQ Generation", enabled: Boolean(features.faqGeneration) },
+        { key: "competitorTracking", label: "Competitor Tracking", enabled: Boolean(features.competitorTracking) },
+        { key: "revenueOpportunity", label: "Revenue Timeline", enabled: Boolean(features.revenueOpportunity) },
+        { key: "faqPublishing", label: "Shopify Publishing", enabled: Boolean(features.faqPublishing) },
+        { key: "executiveReports", label: "Executive Exports", enabled: Boolean(features.executiveReports) },
+      ],
       lastRunAt: lastRun?.createdAt?.toISOString() ?? null,
       lastRunScore: lastRun?.insightScore ?? null,
       publishedCount,
@@ -60,7 +82,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     return json({
       plan: "free",
       planLabel: "Free",
-      features: {},
+      features: [],
       lastRunAt: null,
       lastRunScore: null,
       publishedCount: 0,
@@ -71,17 +93,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
     });
   }
 }
-
-const FEATURE_DEFINITIONS = [
-  { key: "weeklyReports", label: "Weekly Reports" },
-  { key: "aiSummary", label: "AI Summaries" },
-  { key: "bulkOptimize", label: "Bulk Optimize" },
-  { key: "emailReports", label: "Email Reports" },
-  { key: "competitorTracking", label: "Competitor Tracking" },
-  { key: "revenueOpportunity", label: "Revenue Timeline" },
-  { key: "productOptimizer", label: "Product Optimizer" },
-  { key: "aiProductOptimize", label: "AI Copilot & Marketing" },
-] as const;
 
 export default function StatusPage() {
   const {
@@ -100,9 +111,9 @@ export default function StatusPage() {
 
   if (navigation.state === "loading") return <DashboardSkeleton />;
 
-  const enabledFeatureCount = FEATURE_DEFINITIONS.filter(
-    (f) => (features as Record<string, boolean>)[f.key]
-  ).length;
+  const featureRows = features.filter((feature): feature is NonNullable<typeof feature> => Boolean(feature));
+  const enabledFeatureCount = featureRows.filter((feature) => feature.enabled).length;
+  const featureTotal = featureRows.length || 1;
 
   return (
     <AppPage
@@ -128,11 +139,11 @@ export default function StatusPage() {
               <InlineStack align="space-between" blockAlign="center">
                 <Text as="p" variant="bodyMd">Features Enabled</Text>
                 <Text as="p" variant="bodyMd" fontWeight="semibold">
-                  {`${enabledFeatureCount} / ${FEATURE_DEFINITIONS.length}`}
+                  {`${enabledFeatureCount} / ${featureRows.length}`}
                 </Text>
               </InlineStack>
               <ProgressBar
-                progress={Math.round((enabledFeatureCount / FEATURE_DEFINITIONS.length) * 100)}
+                progress={Math.round((enabledFeatureCount / featureTotal) * 100)}
                 size="small"
                 tone={enabledFeatureCount >= 6 ? "success" : "primary"}
               />
@@ -148,8 +159,8 @@ export default function StatusPage() {
               description="Which features are unlocked on your current plan."
             />
             <InlineGrid columns={{ xs: 1, sm: 2 }} gap="200">
-              {FEATURE_DEFINITIONS.map((f) => {
-                const enabled = Boolean((features as Record<string, boolean>)[f.key]);
+              {featureRows.map((f) => {
+                const enabled = Boolean(f.enabled);
                 return (
                   <InlineStack key={f.key} align="space-between" blockAlign="center" gap="200">
                     <Text as="p" variant="bodyMd">{f.label}</Text>

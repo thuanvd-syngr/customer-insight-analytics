@@ -2,7 +2,11 @@
 
 This guide deploys the Shopify Remix app to Google Cloud Run with Cloud SQL PostgreSQL for production testing. It uses the Cloud Run URL directly, without a custom domain, ngrok, or a tunnel.
 
-Do not commit secrets. Store `SHOPIFY_API_KEY`, `SHOPIFY_API_SECRET`, and `DATABASE_URL` in Secret Manager.
+Do not commit secrets. Store Shopify and database values in Secret Manager. The current Cloud Run service uses these secret names:
+
+- `customer-insight-shopify-api-key`
+- `customer-insight-shopify-api-secret`
+- `customer-insight-database-url`
 
 ## Repo Check
 
@@ -12,7 +16,7 @@ Do not commit secrets. Store `SHOPIFY_API_KEY`, `SHOPIFY_API_SECRET`, and `DATAB
 - `app/shopify.server.ts`: Shopify uses `SHOPIFY_API_KEY`, `SHOPIFY_API_SECRET`, `SCOPES`, and `SHOPIFY_APP_URL` from env.
 - `app/db.server.ts`: Prisma client is created from runtime env.
 - `scripts/start-production.mjs`: runs `prisma migrate deploy`, then starts Remix on Cloud Run's `$PORT`.
-- `shopify.app.production.toml`: production scopes exclude `read_customers`; GDPR webhook routes are registered with `compliance_topics`.
+- `shopify.app.production.toml`: production scopes exclude `read_customers` and include the content/product write scopes needed for publish tests.
 - No production path should use localhost, ngrok, tunnel, or a hardcoded dev URL.
 
 The current GDPR webhook routes in this repo are:
@@ -72,15 +76,15 @@ gcloud sql users set-password postgres \
 Create or update Shopify secrets:
 
 ```bash
-printf 'SHOPIFY_PRODUCTION_API_KEY' | gcloud secrets create SHOPIFY_API_KEY --data-file=-
-printf 'SHOPIFY_PRODUCTION_API_SECRET' | gcloud secrets create SHOPIFY_API_SECRET --data-file=-
+printf 'SHOPIFY_PRODUCTION_API_KEY' | gcloud secrets create customer-insight-shopify-api-key --data-file=-
+printf 'SHOPIFY_PRODUCTION_API_SECRET' | gcloud secrets create customer-insight-shopify-api-secret --data-file=-
 ```
 
 If a secret already exists, add a new version:
 
 ```bash
-printf 'SHOPIFY_PRODUCTION_API_KEY' | gcloud secrets versions add SHOPIFY_API_KEY --data-file=-
-printf 'SHOPIFY_PRODUCTION_API_SECRET' | gcloud secrets versions add SHOPIFY_API_SECRET --data-file=-
+printf 'SHOPIFY_PRODUCTION_API_KEY' | gcloud secrets versions add customer-insight-shopify-api-key --data-file=-
+printf 'SHOPIFY_PRODUCTION_API_SECRET' | gcloud secrets versions add customer-insight-shopify-api-secret --data-file=-
 ```
 
 Build the Cloud SQL Unix socket `DATABASE_URL`:
@@ -93,14 +97,14 @@ Store it in Secret Manager:
 
 ```bash
 printf 'postgresql://postgres:CHANGE_ME_STRONG_PASSWORD@localhost/customer_insight?host=/cloudsql/PROJECT_ID:asia-southeast1:customer-insight-db' \
-  | gcloud secrets create DATABASE_URL --data-file=-
+  | gcloud secrets create customer-insight-database-url --data-file=-
 ```
 
 If it already exists:
 
 ```bash
 printf 'postgresql://postgres:CHANGE_ME_STRONG_PASSWORD@localhost/customer_insight?host=/cloudsql/PROJECT_ID:asia-southeast1:customer-insight-db' \
-  | gcloud secrets versions add DATABASE_URL --data-file=-
+  | gcloud secrets versions add customer-insight-database-url --data-file=-
 ```
 
 ## 7. Deploy First Revision
@@ -113,8 +117,8 @@ gcloud run deploy customer-insight-analytics \
   --region asia-southeast1 \
   --allow-unauthenticated \
   --add-cloudsql-instances PROJECT_ID:asia-southeast1:customer-insight-db \
-  --set-env-vars NODE_ENV=production,SHOPIFY_BILLING_TEST=true,SHOPIFY_APP_URL=https://TEMP_REPLACE_AFTER_DEPLOY,HOST=https://TEMP_REPLACE_AFTER_DEPLOY,SCOPES=read_products,read_orders,read_content \
-  --set-secrets SHOPIFY_API_KEY=SHOPIFY_API_KEY:latest,SHOPIFY_API_SECRET=SHOPIFY_API_SECRET:latest,DATABASE_URL=DATABASE_URL:latest
+  --set-env-vars NODE_ENV=production,SHOPIFY_BILLING_TEST=true,SHOPIFY_APP_URL=https://TEMP_REPLACE_AFTER_DEPLOY,HOST=https://TEMP_REPLACE_AFTER_DEPLOY,SCOPES=read_products,write_products,read_orders,read_content,write_content \
+  --set-secrets SHOPIFY_API_KEY=customer-insight-shopify-api-key:latest,SHOPIFY_API_SECRET=customer-insight-shopify-api-secret:latest,DATABASE_URL=customer-insight-database-url:latest
 ```
 
 ## 8. Get Cloud Run URL
@@ -150,7 +154,7 @@ gcloud run jobs create customer-insight-migrate \
   --region asia-southeast1 \
   --source . \
   --set-cloudsql-instances PROJECT_ID:asia-southeast1:customer-insight-db \
-  --set-secrets DATABASE_URL=DATABASE_URL:latest,SHOPIFY_API_KEY=SHOPIFY_API_KEY:latest,SHOPIFY_API_SECRET=SHOPIFY_API_SECRET:latest \
+  --set-secrets DATABASE_URL=customer-insight-database-url:latest,SHOPIFY_API_KEY=customer-insight-shopify-api-key:latest,SHOPIFY_API_SECRET=customer-insight-shopify-api-secret:latest \
   --set-env-vars NODE_ENV=production \
   --command npx \
   --args prisma,migrate,deploy
@@ -173,7 +177,7 @@ gcloud run jobs create customer-insight-migrate \
   --region asia-southeast1 \
   --image asia-southeast1-docker.pkg.dev/PROJECT_ID/apps/customer-insight-analytics \
   --set-cloudsql-instances PROJECT_ID:asia-southeast1:customer-insight-db \
-  --set-secrets DATABASE_URL=DATABASE_URL:latest,SHOPIFY_API_KEY=SHOPIFY_API_KEY:latest,SHOPIFY_API_SECRET=SHOPIFY_API_SECRET:latest \
+  --set-secrets DATABASE_URL=customer-insight-database-url:latest,SHOPIFY_API_KEY=customer-insight-shopify-api-key:latest,SHOPIFY_API_SECRET=customer-insight-shopify-api-secret:latest \
   --set-env-vars NODE_ENV=production \
   --command npx \
   --args prisma,migrate,deploy
@@ -208,7 +212,7 @@ Production scopes must stay:
 
 ```toml
 [access_scopes]
-scopes = "read_products,read_orders,read_content"
+scopes = "read_products,write_products,read_orders,read_content,write_content"
 ```
 
 Then deploy the Shopify config with the current Shopify CLI:

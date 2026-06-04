@@ -70,3 +70,5 @@ Use `.env.production.example` as the required variable list. Run `npm run check:
 Set `SHOPIFY_BILLING_TEST=false` for real charges, or `true` only for test stores while validating billing.
 
 For Cloud Run test deployment without a custom domain, use [docs/CLOUD_RUN_TEST_DEPLOY.md](docs/CLOUD_RUN_TEST_DEPLOY.md) and `scripts/cloud-run-test-deploy.sh`.
+
+For the full release preflight, real plan test matrix, Cloud Run verification, and store submission handoff, use [docs/RELEASE_RUNBOOK.md](docs/RELEASE_RUNBOOK.md).

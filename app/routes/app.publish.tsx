@@ -24,6 +24,7 @@ import {
   missingScopes,
 } from "~/lib/action-loading";
 import { getDevPlanOverride, resolvePlan, type PlanId } from "~/lib/billing";
+import { PLANS } from "~/lib/billing/plans";
 import { generateFaqFromOpportunity } from "~/lib/faq-generator";
 import { hasPublishAbuse, hasXss, sanitizeText } from "~/lib/sanitize";
 import { logUsage } from "~/lib/log-usage.server";
@@ -94,7 +95,8 @@ function buildFaqsForGroup(groupId: string, insight: typeof EMPTY_INSIGHT): FaqI
 
 export async function loader({ request }: LoaderFunctionArgs) {
   try {
-    const { shop, session } = await getContext(request);
+    const { shop, plan, session } = await getContext(request);
+    const canPublish = PLANS[plan].features.faqPublishing;
     const faqModel = getDelegate(prisma, "generatedFaq");
     const bulkJob = getDelegate(prisma, "bulkJob");
     const [latestRun, published, counts, generatedFaqs, recentBulkJobs] = await Promise.all([
@@ -146,6 +148,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
         targetTypes: ["page", "blog", "product_faq"],
       },
       storeName: shop.shopDomain.replace(".myshopify.com", ""),
+      canPublish,
       loadError: null,
     });
   } catch (error) {
@@ -173,13 +176,14 @@ export async function loader({ request }: LoaderFunctionArgs) {
         targetTypes: ["page", "blog", "product_faq"],
       },
       storeName: "",
+      canPublish: false,
       loadError: "Publish data is loading. Refresh in a moment — your published pages are safe.",
     });
   }
 }
 
 export async function action({ request }: ActionFunctionArgs) {
-  const { shop, admin, session } = await getContext(request);
+  const { shop, plan, admin, session } = await getContext(request);
   const form = await request.formData();
   const intent = String(form.get("intent") ?? "");
 
@@ -188,6 +192,9 @@ export async function action({ request }: ActionFunctionArgs) {
   // there is no standalone product_faq publish intent.
   const productFaqScopeMissing = missingScopes(session.scope, PRODUCT_FAQ_PUBLISH_SCOPES);
   const requiresContentPublish = ["publish-page", "publish-blog", "publish-all-recovery", "publish-retry"].includes(intent);
+  if (requiresContentPublish && !PLANS[plan].features.faqPublishing) {
+    return json({ error: "Publishing recovery content is available on Growth and Pro plans." }, { status: 403 });
+  }
   if (requiresContentPublish && contentScopeMissing.length > 0) {
     return json({
       error: `Missing Shopify scope${contentScopeMissing.length === 1 ? "" : "s"}: ${contentScopeMissing.join(", ")}. Update app scopes, redeploy, then reinstall or reauthorize the app.`,
@@ -390,7 +397,7 @@ function contentTypeTone(type: PageContentType): "info" | "success" | "warning" 
 }
 
 export default function PublishHub() {
-  const { hasInsight, published, counts, pagePreview, blogPreview, productFaqPreview, recentBulkJobs, diagnostics, storeName, loadError } = useLoaderData<typeof loader>();
+  const { hasInsight, published, counts, pagePreview, blogPreview, productFaqPreview, recentBulkJobs, diagnostics, storeName, canPublish, loadError } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
   const [pendingActionKey, setPendingActionKey] = useState<string | null>(null);
@@ -423,7 +430,7 @@ export default function PublishHub() {
 
   const activePublished = published.filter((p): p is NonNullable<typeof p> => p != null && p.status === "published");
   const failedPublished = published.filter((p): p is NonNullable<typeof p> => p != null && p.status === "failed");
-  const contentPublishDisabled = diagnostics.scopes.missingContent.length > 0 || !hasInsight;
+  const contentPublishDisabled = diagnostics.scopes.missingContent.length > 0 || !hasInsight || !canPublish;
 
   return (
     <AppPage
@@ -453,6 +460,12 @@ export default function PublishHub() {
               Import customer questions and run analysis before publishing recovery content.
             </p>
             <Button url="/app/import" variant="primary">Import Customer Questions</Button>
+          </Banner>
+        ) : null}
+        {!canPublish ? (
+          <Banner tone="warning" title="Growth or Pro plan required">
+            <p>Publishing to Shopify is disabled on Free and Starter. Upgrade before pushing pages, blog articles, or product FAQs live.</p>
+            <Button url="/app/billing" variant="primary">Manage Plan</Button>
           </Banner>
         ) : null}
 

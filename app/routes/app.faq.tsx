@@ -127,7 +127,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       saved: parseSaved(savedSetting?.value),
       generatedFaqs,
       stats,
-      canGenerate: PLANS[plan].features.faqGeneration || plan === "free" || plan === "starter",
+      canGenerate: PLANS[plan].features.faqGeneration,
       aiProvider: provider.id,
       aiConfigured: provider.isConfigured(),
       aiEnabled,
@@ -144,7 +144,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       saved: [],
       generatedFaqs: [] as GeneratedFaqRecord[],
       stats: defaultFaqStats,
-      canGenerate: true,
+      canGenerate: false,
       aiProvider: provider.id,
       aiConfigured: provider.isConfigured(),
       aiEnabled: false,
@@ -164,6 +164,16 @@ export async function action({ request }: ActionFunctionArgs) {
     const question = String(form.get("question") ?? "What should customers know before buying?");
     const productId = String(form.get("productId") ?? "") || null;
     const productTitle = String(form.get("productTitle") ?? "") || null;
+    const canGenerateFaq = PLANS[plan].features.faqGeneration;
+    const generationIntents = ["save", "bulk-generate", "ai-generate"];
+    const preparationIntents = ["prepare", "bulk-prepare"];
+    const publishIntents = ["publish", "publish-page", "publish-blog"];
+    if ((generationIntents.includes(intent) || preparationIntents.includes(intent)) && !canGenerateFaq) {
+      return json({ error: "FAQ generation is available on Growth and Pro plans." }, { status: 403 });
+    }
+    if (publishIntents.includes(intent) && !PLANS[plan].features.faqPublishing) {
+      return json({ error: "FAQ publishing is available on Growth and Pro plans." }, { status: 403 });
+    }
     const faq = generateFaqFromOpportunity({
       groupId,
       label: groupId,
@@ -374,8 +384,8 @@ export async function action({ request }: ActionFunctionArgs) {
       return redirect("/app/faq");
     }
 
-    if (!PLANS[plan].features.faqGeneration && plan !== "free" && plan !== "starter") {
-      return json({ error: "FAQ generation is available on Growth and Pro." }, { status: 403 });
+    if (!canGenerateFaq) {
+      return json({ error: "FAQ generation is available on Growth and Pro plans." }, { status: 403 });
     }
     return redirect("/app/faq");
   } catch (error) {
@@ -420,6 +430,7 @@ export default function FaqGenerator() {
     saved,
     generatedFaqs,
     stats,
+    canGenerate,
     aiProvider,
     aiConfigured,
     aiEnabled,
@@ -458,6 +469,7 @@ export default function FaqGenerator() {
   const source = opportunities.length ? opportunities : questionOpportunities;
   const items = source.slice(0, 8);
   const actionError = actionData && "error" in actionData ? actionData.error : null;
+  const generationDisabled = !canGenerate;
 
   return (
     <AppPage
@@ -470,7 +482,7 @@ export default function FaqGenerator() {
             <input type="hidden" name="actionKey" value={makeActionKey("generate:faq", "bulk")} />
             <input type="hidden" name="groupId" value={source[0].groupId} />
             <input type="hidden" name="question" value={generateFaqFromOpportunity(source[0]).question} />
-            <Button submit variant="primary" loading={loadingFor(makeActionKey("generate:faq", "bulk"))} disabled={loadingFor(makeActionKey("generate:faq", "bulk"))} onClick={() => markPending(makeActionKey("generate:faq", "bulk"))}>Create Revenue Recovery Content</Button>
+            <Button submit variant="primary" loading={loadingFor(makeActionKey("generate:faq", "bulk"))} disabled={generationDisabled || loadingFor(makeActionKey("generate:faq", "bulk"))} onClick={() => markPending(makeActionKey("generate:faq", "bulk"))}>Create Revenue Recovery Content</Button>
           </Form>
         ) : (
           <Button url="/app/import" variant="primary">Add customer questions</Button>
@@ -487,6 +499,12 @@ export default function FaqGenerator() {
         {timeoutWarning ? (
           <Banner tone="warning" title="Action took longer than expected">
             <p>Action took longer than expected. You can safely retry.</p>
+          </Banner>
+        ) : null}
+        {!canGenerate ? (
+          <Banner tone="warning" title="Growth or Pro plan required">
+            <p>FAQ generation and publishing are available on Growth and Pro plans. You can still preview content before upgrading.</p>
+            <Button url="/app/billing" variant="primary">Manage Plan</Button>
           </Banner>
         ) : null}
         <Card>
@@ -558,7 +576,7 @@ export default function FaqGenerator() {
                             submit
                             variant="primary"
                             loading={loadingFor(makeActionKey("generate:faq", gap.productId ?? gap.productTitle))}
-                            disabled={loadingFor(makeActionKey("generate:faq", gap.productId ?? gap.productTitle))}
+                            disabled={generationDisabled || loadingFor(makeActionKey("generate:faq", gap.productId ?? gap.productTitle))}
                             onClick={() => markPending(makeActionKey("generate:faq", gap.productId ?? gap.productTitle))}
                           >
                             Generate Fix
@@ -692,7 +710,7 @@ export default function FaqGenerator() {
                           <input type="hidden" name="actionKey" value={makeActionKey("generate:faq", item.groupId)} />
                           <input type="hidden" name="groupId" value={item.groupId} />
                           <input type="hidden" name="question" value={generated.question} />
-                          <Button submit variant="primary" loading={loadingFor(makeActionKey("generate:faq", item.groupId))} disabled={loadingFor(makeActionKey("generate:faq", item.groupId))} onClick={() => markPending(makeActionKey("generate:faq", item.groupId))}>
+                          <Button submit variant="primary" loading={loadingFor(makeActionKey("generate:faq", item.groupId))} disabled={generationDisabled || loadingFor(makeActionKey("generate:faq", item.groupId))} onClick={() => markPending(makeActionKey("generate:faq", item.groupId))}>
                             Create Content
                           </Button>
                         </Form>
@@ -702,7 +720,7 @@ export default function FaqGenerator() {
                             <input type="hidden" name="actionKey" value={makeActionKey("generate:faq:ai", item.groupId)} />
                             <input type="hidden" name="contentType" value={`${item.groupId}_faq`} />
                             <input type="hidden" name="groupId" value={item.groupId} />
-                            <Button submit variant="secondary" loading={loadingFor(makeActionKey("generate:faq:ai", item.groupId))} disabled={loadingFor(makeActionKey("generate:faq:ai", item.groupId))} onClick={() => markPending(makeActionKey("generate:faq:ai", item.groupId))}>
+                            <Button submit variant="secondary" loading={loadingFor(makeActionKey("generate:faq:ai", item.groupId))} disabled={generationDisabled || loadingFor(makeActionKey("generate:faq:ai", item.groupId))} onClick={() => markPending(makeActionKey("generate:faq:ai", item.groupId))}>
                               AI Generate
                             </Button>
                           </Form>
@@ -718,7 +736,7 @@ export default function FaqGenerator() {
                           <input type="hidden" name="actionKey" value={makeActionKey("prepare:faq", item.groupId)} />
                           <input type="hidden" name="groupId" value={item.groupId} />
                           <input type="hidden" name="question" value={generated.question} />
-                          <Button submit loading={loadingFor(makeActionKey("prepare:faq", item.groupId))} disabled={loadingFor(makeActionKey("prepare:faq", item.groupId))} onClick={() => markPending(makeActionKey("prepare:faq", item.groupId))}>Prepare publish draft</Button>
+                          <Button submit loading={loadingFor(makeActionKey("prepare:faq", item.groupId))} disabled={generationDisabled || loadingFor(makeActionKey("prepare:faq", item.groupId))} onClick={() => markPending(makeActionKey("prepare:faq", item.groupId))}>Prepare publish draft</Button>
                         </Form>
                       </InlineStack>
                     </BlockStack>
@@ -755,7 +773,7 @@ export default function FaqGenerator() {
                           <input type="hidden" name="intent" value="prepare" />
                           <input type="hidden" name="actionKey" value={makeActionKey("prepare:faq", faq.id)} />
                           <input type="hidden" name="id" value={faq.id} />
-                          <Button submit size="slim" loading={loadingFor(makeActionKey("prepare:faq", faq.id))} disabled={loadingFor(makeActionKey("prepare:faq", faq.id))} onClick={() => markPending(makeActionKey("prepare:faq", faq.id))}>
+                          <Button submit size="slim" loading={loadingFor(makeActionKey("prepare:faq", faq.id))} disabled={generationDisabled || loadingFor(makeActionKey("prepare:faq", faq.id))} onClick={() => markPending(makeActionKey("prepare:faq", faq.id))}>
                             Prepare publish draft
                           </Button>
                         </Form>
@@ -767,28 +785,28 @@ export default function FaqGenerator() {
                             <input type="hidden" name="actionKey" value={makeActionKey("publish:faq:metafield", faq.id)} />
                             <input type="hidden" name="id" value={faq.id} />
                             <input type="hidden" name="publishTarget" value="metafield" />
-                            <Button submit size="slim" variant="primary" loading={loadingFor(makeActionKey("publish:faq:metafield", faq.id))} disabled={loadingFor(makeActionKey("publish:faq:metafield", faq.id))} onClick={() => markPending(makeActionKey("publish:faq:metafield", faq.id))}>Publish metafield</Button>
+                            <Button submit size="slim" variant="primary" loading={loadingFor(makeActionKey("publish:faq:metafield", faq.id))} disabled={generationDisabled || loadingFor(makeActionKey("publish:faq:metafield", faq.id))} onClick={() => markPending(makeActionKey("publish:faq:metafield", faq.id))}>Publish metafield</Button>
                           </Form>
                           <Form method="post">
                             <input type="hidden" name="intent" value="publish" />
                             <input type="hidden" name="actionKey" value={makeActionKey("publish:faq:append", faq.id)} />
                             <input type="hidden" name="id" value={faq.id} />
                             <input type="hidden" name="publishTarget" value="append_description" />
-                            <Button submit size="slim" loading={loadingFor(makeActionKey("publish:faq:append", faq.id))} disabled={loadingFor(makeActionKey("publish:faq:append", faq.id))} onClick={() => markPending(makeActionKey("publish:faq:append", faq.id))}>Append description</Button>
+                            <Button submit size="slim" loading={loadingFor(makeActionKey("publish:faq:append", faq.id))} disabled={generationDisabled || loadingFor(makeActionKey("publish:faq:append", faq.id))} onClick={() => markPending(makeActionKey("publish:faq:append", faq.id))}>Append description</Button>
                           </Form>
                           <Form method="post">
                             <input type="hidden" name="intent" value="publish-page" />
                             <input type="hidden" name="actionKey" value={makeActionKey("publish:faq-page", faq.id)} />
                             <input type="hidden" name="id" value={faq.id} />
                             <input type="hidden" name="contentType" value="faq_page" />
-                            <Button submit size="slim" loading={loadingFor(makeActionKey("publish:faq-page", faq.id))} disabled={loadingFor(makeActionKey("publish:faq-page", faq.id))} onClick={() => markPending(makeActionKey("publish:faq-page", faq.id))}>Publish FAQ Page</Button>
+                            <Button submit size="slim" loading={loadingFor(makeActionKey("publish:faq-page", faq.id))} disabled={generationDisabled || loadingFor(makeActionKey("publish:faq-page", faq.id))} onClick={() => markPending(makeActionKey("publish:faq-page", faq.id))}>Publish FAQ Page</Button>
                           </Form>
                           <Form method="post">
                             <input type="hidden" name="intent" value="publish-blog" />
                             <input type="hidden" name="actionKey" value={makeActionKey("publish:faq-blog", faq.id)} />
                             <input type="hidden" name="id" value={faq.id} />
                             <input type="hidden" name="groupId" value={faq.groupId ?? "shipping"} />
-                            <Button submit size="slim" loading={loadingFor(makeActionKey("publish:faq-blog", faq.id))} disabled={loadingFor(makeActionKey("publish:faq-blog", faq.id))} onClick={() => markPending(makeActionKey("publish:faq-blog", faq.id))}>Publish Blog Article</Button>
+                            <Button submit size="slim" loading={loadingFor(makeActionKey("publish:faq-blog", faq.id))} disabled={generationDisabled || loadingFor(makeActionKey("publish:faq-blog", faq.id))} onClick={() => markPending(makeActionKey("publish:faq-blog", faq.id))}>Publish Blog Article</Button>
                           </Form>
                         </>
                       ) : null}
@@ -864,7 +882,7 @@ export default function FaqGenerator() {
                 <Form method="post">
                   <input type="hidden" name="intent" value="bulk-prepare" />
                   <input type="hidden" name="actionKey" value={makeActionKey("prepare:faq", "bulk")} />
-                  <Button submit loading={loadingFor(makeActionKey("prepare:faq", "bulk"))} disabled={loadingFor(makeActionKey("prepare:faq", "bulk"))} onClick={() => markPending(makeActionKey("prepare:faq", "bulk"))}>Prepare publish draft</Button>
+                  <Button submit loading={loadingFor(makeActionKey("prepare:faq", "bulk"))} disabled={generationDisabled || loadingFor(makeActionKey("prepare:faq", "bulk"))} onClick={() => markPending(makeActionKey("prepare:faq", "bulk"))}>Prepare publish draft</Button>
                 </Form>
               ) : null}
               <Form method="post">
@@ -872,7 +890,7 @@ export default function FaqGenerator() {
                 <input type="hidden" name="actionKey" value={makeActionKey("generate:faq", "bulk")} />
                 <input type="hidden" name="groupId" value={source[0].groupId} />
                 <input type="hidden" name="question" value={generateFaqFromOpportunity(source[0]).question} />
-                <Button submit variant="primary" loading={loadingFor(makeActionKey("generate:faq", "bulk"))} disabled={loadingFor(makeActionKey("generate:faq", "bulk"))} onClick={() => markPending(makeActionKey("generate:faq", "bulk"))}>
+                <Button submit variant="primary" loading={loadingFor(makeActionKey("generate:faq", "bulk"))} disabled={generationDisabled || loadingFor(makeActionKey("generate:faq", "bulk"))} onClick={() => markPending(makeActionKey("generate:faq", "bulk"))}>
                   Create Revenue Recovery Content
                 </Button>
               </Form>

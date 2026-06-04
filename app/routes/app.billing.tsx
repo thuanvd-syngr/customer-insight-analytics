@@ -89,7 +89,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
 }
 
 export async function action({ request }: ActionFunctionArgs) {
-  const { billing } = await authenticate.admin(request);
+  const { billing, session } = await authenticate.admin(request);
   const form = await request.formData();
   const id = String(form.get("plan")) as PlanId;
   if (!PLAN_IDS.includes(id)) return json({ error: "Plan not available" }, { status: 400 });
@@ -97,7 +97,7 @@ export async function action({ request }: ActionFunctionArgs) {
     await billing.request({
       plan: PLANS[id].name,
       isTest: isBillingTestMode(),
-      returnUrl: `${process.env.SHOPIFY_APP_URL}/app/billing`,
+      returnUrl: `${process.env.SHOPIFY_APP_URL}/auth/login?shop=${encodeURIComponent(session.shop)}`,
     });
   }
   return json({ ok: true });
@@ -106,12 +106,13 @@ export async function action({ request }: ActionFunctionArgs) {
 export default function Billing() {
   const { plan, usage, reportsGenerated, faqsPrepared, opportunitiesFound, roiEstimateHigh, isProduction, devOverride, billingTestMode, loadError } = useLoaderData<typeof loader>();
   const currentPlan = PLAN_IDS.includes(plan as PlanId) ? plan as PlanId : "free";
+  const canShowGrowthCta = currentPlan === "free" || currentPlan === "starter";
   return (
     <AppPage
       title="Plans & Billing"
       subtitle="Identify buying objections and prepare recovery content. Results vary by store, traffic, and product category."
       primaryAction={
-        plan !== "growth" ? (
+        canShowGrowthCta ? (
           <Form method="post">
             <input type="hidden" name="intent" value="subscribe" />
             <input type="hidden" name="plan" value="growth" />
@@ -182,8 +183,8 @@ export default function Billing() {
                     <Text as="p" variant="bodySm">{feature}</Text>
                   </div>
                 ))}
-                {plan === item.id ? <Badge tone="success">Current</Badge> : null}
-                {item.id !== "free" ? (
+                {currentPlan === item.id ? <Badge tone="success">Current</Badge> : null}
+                {item.id !== "free" && currentPlan !== item.id && PLAN_IDS.indexOf(item.id) > PLAN_IDS.indexOf(currentPlan) ? (
                   <Form method="post">
                     <input type="hidden" name="intent" value="subscribe" />
                     <input type="hidden" name="plan" value={item.id} />
